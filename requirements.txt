@@ -1,0 +1,12 @@
+numpy
+opencv-python
+torch
+torchvision
+facenet-pytorch
+scikit-learn
+pyyaml
+matplotlib
+pillow
+tqdm
+scipy
+pandas

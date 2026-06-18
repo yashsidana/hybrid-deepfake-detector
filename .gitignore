@@ -1,9 +1,15 @@
+# Dataset
+data/
+
+# Saved models
+saved_models/
+
+# Python cache
 __pycache__/
-*.py[cod]
-data/raw/
-data/processed/
-models/
-venv/
-.venv/
-.vscode/
-.idea/
+*.pyc
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Colab temp files
+/content/

@@ -35,7 +35,8 @@ def load_model(device):
 
     print(
         f"Loaded checkpoint from epoch {checkpoint.get('epoch', '?')} "
-        f"(selected on Val Acc: {checkpoint.get('val_accuracy', float('nan')):.4f})"
+        f"(selected on Val Macro-F1: {checkpoint.get('val_macro_f1', float('nan')):.4f}, "
+        f"Val Acc: {checkpoint.get('val_accuracy', float('nan')):.4f})"
     )
     return model
 
@@ -70,9 +71,9 @@ def main():
     precision = precision_score(all_labels, all_preds, zero_division=0)
     recall = recall_score(all_labels, all_preds, zero_division=0)
     f1 = f1_score(all_labels, all_preds, zero_division=0)
-    cm = confusion_matrix(all_labels, all_preds)
+    cm = confusion_matrix(all_labels, all_preds, labels=[0, 1])
     report = classification_report(
-        all_labels, all_preds, target_names=CLASS_NAMES, zero_division=0
+        all_labels, all_preds, labels=[0, 1], target_names=CLASS_NAMES, zero_division=0
     )
 
     print("\n" + "=" * 55)

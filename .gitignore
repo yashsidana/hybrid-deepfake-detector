@@ -1,8 +1,8 @@
 # Dataset
-data/
+/data/
 
 # Saved models
-saved_models/
+/saved_models/
 
 # Python cache
 __pycache__/

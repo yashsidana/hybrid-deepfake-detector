@@ -2,7 +2,7 @@
 
 A modular AI-based Hybrid Deepfake Detection System that combines **Semantic Feature Extraction**, **Temporal Feature Extraction**, and **Feature Fusion** to accurately classify videos as **Real** or **Fake**.
 
-> **Current Status:** Phase 1 (Semantic Feature Extraction) Completed
+> **Current Status:** Phase 2 (Temporal Feature Extraction) Completed — Feature Fusion next
 
 ---
 
@@ -32,7 +32,7 @@ Face Detection
 Semantic Feature Extraction
         │
         ▼
-Temporal Feature Extraction (Upcoming)
+Temporal Feature Extraction
         │
         ▼
 Feature Fusion (Upcoming)
@@ -208,18 +208,39 @@ Training is performed on precomputed face images instead of videos, significantl
 
 ### image_loader.py
 
-Uses
-
-```
-torchvision.datasets.ImageFolder
-```
-
-to load face images.
+Uses a custom CSV-driven `Dataset` that reads `data/splits/train.csv`, `val.csv`, and `test.csv` — no random re-splitting, so the same train/val/test boundaries are used everywhere in the pipeline.
 
 Returns
 
 - Train DataLoader
+- Validation DataLoader
 - Test DataLoader
+
+---
+
+### precompute_temporal.py
+
+One-time preprocessing step for the temporal branch — mirrors `precompute_faces.py`'s caching pattern.
+
+Converts
+
+```
+Video
+    ↓
+16 Sampled Frames
+    ↓
+Face Crop (per frame)
+    ↓
+Cached Sequence (.npy, shape [16, 224, 224, 3])
+```
+
+Resumable — already-cached videos are skipped on a rerun, so an interrupted preprocessing run can pick up where it left off.
+
+---
+
+### temporal_dataset.py
+
+The temporal-branch equivalent of `image_loader.py`. Loads the cached `.npy` sequences using the same `train.csv`/`val.csv`/`test.csv` splits, so both branches train/validate/test on the exact same videos.
 
 ---
 
@@ -264,6 +285,40 @@ Fake
 
 ---
 
+# Temporal Feature Extraction
+
+Current architecture: **CNN (ResNet-18, frozen) + LSTM**
+
+Chosen over Optical Flow+CNN, ConvLSTM, 3D CNN, and Video Transformer as the best accuracy/compute/deployment trade-off for a Colab-compatible, capstone-scale project — see `src/features/temporal_extractor.py` for the full architecture rationale in code comments.
+
+Architecture
+
+```
+16-Frame Face Sequence
+        │
+        ▼
+ResNet-18 (per frame, frozen)
+        │
+        ▼
+Per-Frame Feature Sequence [16, 512]
+        │
+        ▼
+LSTM
+        │
+        ▼
+Temporal Embedding [256]
+        │
+        ▼
+Fully Connected Layer
+        │
+        ▼
+Binary Classification
+```
+
+Both the semantic and temporal branches expose a 256-dimensional embedding (`embedding, logits = model(x)`), by design — this is what Feature Fusion (Phase 3) will concatenate into a 512-dimensional fused vector.
+
+---
+
 # Training Pipeline
 
 Current pipeline
@@ -287,27 +342,44 @@ Adam Optimizer
 Training includes
 
 - Mixed Precision Training (AMP)
+- Train → Validation each epoch, with the best checkpoint selected on **validation accuracy** (the test set is never used for model selection)
 - Automatic checkpoint saving
-- Best model preservation
+
+The temporal branch's training additionally includes:
+
+- Early stopping (patience-based)
+- Learning-rate scheduling (`ReduceLROnPlateau`)
+- Progress bars and file-based logging (`saved_models/train_temporal.log`)
 
 ---
 
 # Evaluation
 
-Current evaluation metrics
+The test set is evaluated exactly once, after model selection, never during training.
 
-- Training Accuracy
-- Test Accuracy
+Metrics reported (both branches)
+
+- Accuracy
 - Precision
 - Recall
 - F1-Score
 - Confusion Matrix
+- Classification Report
+- ROC-AUC (temporal branch)
+
+Results are printed to console and saved as JSON:
+
+```
+saved_models/test_evaluation_report.json           # semantic branch
+saved_models/test_temporal_evaluation_report.json  # temporal branch
+```
 
 Model checkpoints are stored as
 
 ```
 saved_models/
-└── semantic_checkpoint.pth
+├── semantic_checkpoint.pth
+└── temporal_checkpoint.pth
 ```
 
 ---
@@ -349,28 +421,27 @@ saved_models/
 
 - Project structure
 - Dataset setup
-- Data preprocessing
+- CSV-based train/validation/test split pipeline
 - Frame sampling
-- Face detection
-- Face preprocessing
-- EfficientNet-B0 semantic classifier
-- Training pipeline
-- Evaluation pipeline
+- Face detection (MTCNN)
+- Face preprocessing (semantic + temporal, both resumable)
+- EfficientNet-B0 semantic classifier, exposing embeddings
+- CNN (ResNet-18) + LSTM temporal classifier, exposing embeddings
+- Validation-based checkpointing (both branches)
+- Full evaluation metrics incl. ROC-AUC
 - Model checkpointing
 
 ---
 
 ## In Progress
 
-- Temporal Feature Extraction
-- Optical Flow generation
-- Motion feature learning
+- Feature Fusion design
 
 ---
 
 ## Upcoming
 
-- Feature Fusion
+- Feature Fusion implementation
 - Final Hybrid Model
 - Video Inference Pipeline
 - REST API
@@ -455,18 +526,21 @@ Run preprocessing
 python -m src.preprocessing.setup_dataset
 python -m src.preprocessing.create_splits
 python -m src.preprocessing.precompute_faces
+python -m src.preprocessing.precompute_temporal
 ```
 
-Train semantic model
+Train and evaluate the semantic branch
 
 ```bash
 python -m src.modeling.train_semantic
+python -m src.modeling.test_semantic
 ```
 
-Evaluate model
+Train and evaluate the temporal branch
 
 ```bash
-python -m src.modeling.test_semantic
+python -m src.modeling.train_temporal
+python -m src.modeling.test_temporal
 ```
 
 ---
@@ -480,7 +554,7 @@ python -m src.modeling.test_semantic
 - [x] Semantic feature extraction
 - [x] Semantic model training
 - [x] Semantic model evaluation
-- [ ] Temporal feature extraction
+- [x] Temporal feature extraction
 - [ ] Feature fusion
 - [ ] Hybrid classifier
 - [ ] Video inference
@@ -492,7 +566,13 @@ python -m src.modeling.test_semantic
 
 # Authors
 
-**Yash Sidana**
+**Team**
+
+- Hardik Abrol
+- Gaurang Mangla
+- Kaushik Arora
+- Sarthak Gaba
+- Yash Sidana
 
 B.Tech Capstone Project
 

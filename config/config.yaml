@@ -1,1 +1,43 @@
-{"data":{"raw_dir":"data/raw","processed_dir":"data/processed","metadata_path":"data/metadata.json","image_size":224},"preprocessing":{"face_detection":{"threshold":0.90},"temporal":{"optical_flow_method":"farneback","num_frames":16}},"models":{"semantic":{"weights_path":"models/semantic/deepfake_model.pth","features_dim":256},"temporal":{"weights_path":"saved_models/temporal_checkpoint.pth","features_dim":256,"cnn_feature_dim":512,"num_frames":16,"lstm_hidden_size":256,"lstm_num_layers":1},"fusion":{"classifier_type":"svm","model_path":"models/fusion_classifier/fusion_model.pkl"}},"training":{"batch_size":16,"learning_rate":0.001,"epochs":5,"device":"cuda"}}
+# Dataset enable/disable flags:
+#   true                          -> enabled, uses adapter defaults
+#   false                         -> disabled (default for anything not listed)
+#   {enabled: true, hf_repo_id: ...} -> enabled, with adapter-specific extra config
+#                                       (currently only genvidbench uses this form)
+data:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  metadata_path: data/metadata/metadata.csv
+  splits_dir: data/splits
+  image_size: 224
+datasets:
+  celebdf: true
+  dfdc: false
+  faceforensics: false
+  fakeavceleb: false
+  genvidbench: false
+  custom: false
+preprocessing:
+  face_detection:
+    threshold: 0.9
+  temporal:
+    optical_flow_method: farneback
+    num_frames: 16
+models:
+  semantic:
+    weights_path: models/semantic/deepfake_model.pth
+    features_dim: 256
+  temporal:
+    weights_path: saved_models/temporal_checkpoint.pth
+    features_dim: 256
+    cnn_feature_dim: 512
+    num_frames: 16
+    lstm_hidden_size: 256
+    lstm_num_layers: 1
+  fusion:
+    classifier_type: svm
+    model_path: models/fusion_classifier/fusion_model.pkl
+training:
+  batch_size: 16
+  learning_rate: 0.001
+  epochs: 5
+  device: cuda

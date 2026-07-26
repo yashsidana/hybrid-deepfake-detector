@@ -14,9 +14,8 @@ from torchvision import transforms
 _DEFAULT_NUM_WORKERS = 0 if os.name == "nt" else 2
 
 # Root where precompute_faces.py writes cropped face images:
-#   data/processed/semantic_faces/real/<video_stem>.jpg
-#   data/processed/semantic_faces/fake/<video_stem>.jpg
-FACES_ROOT = "data/processed/semantic_faces"
+#   data/processed/semantic/<dataset>/<video_path with .mp4 -> .jpg>
+FACES_ROOT = "data/processed/semantic"
 
 # Root where create_splits.py writes train.csv / val.csv / test.csv
 SPLITS_ROOT = "data/splits"
@@ -37,8 +36,11 @@ class FaceCSVDataset(Dataset):
     semantic_faces/ folder, silently discarding train.csv/val.csv/test.csv
     and re-shuffling train/test membership on every run.
 
-    Each CSV row is: video (e.g. "real/00001.mp4"), label (0=real, 1=fake).
-    We resolve that to the corresponding precomputed face image path.
+    Each CSV row is: video_path (e.g. "real/00001.mp4"), dataset (e.g.
+    "celebdf"), identity, label (0=real, 1=fake). We resolve
+    (dataset, video_path) to the corresponding precomputed face image path
+    -- the dataset namespace prevents collisions between different
+    datasets that happen to share a filename.
     """
 
     def __init__(self, csv_path, faces_root=FACES_ROOT, transform=transform):
@@ -56,7 +58,7 @@ class FaceCSVDataset(Dataset):
         missing = 0
 
         for _, row in df.iterrows():
-            face_path = self._resolve_face_path(row["video"])
+            face_path = self._resolve_face_path(row["dataset"], row["video_path"])
             if os.path.exists(face_path):
                 self.samples.append((face_path, int(row["label"])))
             else:
@@ -77,10 +79,10 @@ class FaceCSVDataset(Dataset):
                 f"precompute_faces.py after create_splits.py?"
             )
 
-    def _resolve_face_path(self, video_rel_path):
-        # "real/00001.mp4" -> "data/processed/semantic_faces/real/00001.jpg"
+    def _resolve_face_path(self, dataset, video_rel_path):
+        # ("celebdf", "real/00001.mp4") -> "data/processed/semantic/celebdf/real/00001.jpg"
         stem = video_rel_path.replace(".mp4", ".jpg")
-        return os.path.join(self.faces_root, stem)
+        return os.path.join(self.faces_root, dataset, stem)
 
     def __len__(self):
         return len(self.samples)

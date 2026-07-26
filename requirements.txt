@@ -10,4 +10,5 @@ pillow
 tqdm
 scipy
 pandas
+huggingface_hub
 kagglehub

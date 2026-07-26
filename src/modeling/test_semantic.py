@@ -20,7 +20,6 @@ REPORT_PATH = "saved_models/test_evaluation_report.json"
 
 CLASS_NAMES = ["real", "fake"]  # label 0 = real, label 1 = fake
 
-
 def load_model(device):
     if not os.path.exists(CHECKPOINT_PATH):
         raise FileNotFoundError(

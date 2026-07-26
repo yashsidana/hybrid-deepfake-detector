@@ -14,9 +14,8 @@ from torchvision import transforms
 _DEFAULT_NUM_WORKERS = 0 if os.name == "nt" else 2
 
 # Root where precompute_temporal.py writes cached face sequences:
-#   data/processed/temporal_faces/real/<video_stem>.npy
-#   data/processed/temporal_faces/fake/<video_stem>.npy
-SEQUENCES_ROOT = "data/processed/temporal_faces"
+#   data/processed/temporal/<dataset>/<video_path with .mp4 -> .npy>
+SEQUENCES_ROOT = "data/processed/temporal"
 
 # Same splits directory used by image_loader.py — no new splitting logic.
 SPLITS_ROOT = "data/splits"
@@ -51,7 +50,7 @@ class TemporalSequenceDataset(Dataset):
         missing = 0
 
         for _, row in df.iterrows():
-            seq_path = self._resolve_sequence_path(row["video"])
+            seq_path = self._resolve_sequence_path(row["dataset"], row["video_path"])
             if os.path.exists(seq_path):
                 self.samples.append((seq_path, int(row["label"])))
             else:
@@ -71,9 +70,9 @@ class TemporalSequenceDataset(Dataset):
                 f"precompute_temporal.py after create_splits.py?"
             )
 
-    def _resolve_sequence_path(self, video_rel_path):
+    def _resolve_sequence_path(self, dataset, video_rel_path):
         stem = video_rel_path.replace(".mp4", ".npy")
-        return os.path.join(self.sequences_root, stem)
+        return os.path.join(self.sequences_root, dataset, stem)
 
     def __len__(self):
         return len(self.samples)

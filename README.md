@@ -2,7 +2,7 @@
 
 A modular AI-based Hybrid Deepfake Detection System that combines **Semantic Feature Extraction**, **Temporal Feature Extraction**, and **Feature Fusion** to accurately classify videos as **Real** or **Fake**.
 
-> **Current Status:** Phase 2 (Temporal Feature Extraction) Completed — Feature Fusion next
+> **Current Status:** Phase 2 (Temporal Feature Extraction) Completed + Multi-Dataset Data Pipeline Completed — Feature Fusion next
 
 ---
 
@@ -48,15 +48,17 @@ Real / Fake + Confidence Score
 
 # Current Features
 
-- Dataset management using KaggleHub
-- Automatic train/test split generation
+- Multi-dataset support (Celeb-DF v2, DFDC, with FaceForensics++/FakeAVCeleb/GenVidBench/custom also wired in — see Dataset section)
+- Identity-aware, leakage-safe train/validation/test splitting (union-find grouping + label-stratified)
+- Class-imbalance-aware training (weighted loss + macro-F1 model selection)
+- Automatic train/validation/test split generation
 - Video frame sampling
-- Face detection preprocessing
-- Face image caching for faster training
-- EfficientNet-B0 based semantic classifier
+- Face detection preprocessing (MTCNN, GPU-aware)
+- Face image + sequence caching for faster training (both resumable)
+- EfficientNet-B0 semantic classifier + CNN(ResNet-18)-LSTM temporal classifier, both exposing embeddings
 - Mixed Precision (AMP) Training
 - Checkpoint saving
-- Model evaluation
+- Full evaluation metrics (accuracy, precision, recall, F1, macro-F1, balanced accuracy, ROC-AUC, confusion matrix)
 
 ---
 
@@ -69,10 +71,30 @@ hybrid-deepfake-detector/
 │
 ├── data/
 │   ├── raw/
+│   │   ├── celebdf/
+│   │   ├── dfdc/
+│   │   ├── faceforensics/       (manual setup — see Dataset section)
+│   │   ├── fakeavceleb/          (manual setup — see Dataset section)
+│   │   ├── genvidbench/
+│   │   └── custom/
 │   ├── processed/
+│   │   ├── semantic/<dataset>/  (precomputed face images)
+│   │   └── temporal/<dataset>/  (precomputed 16-frame sequences)
+│   ├── metadata/
+│   │   ├── metadata.csv         (single source of truth across all enabled datasets)
+│   │   └── validation_report.json
 │   └── splits/
+│       ├── train.csv
+│       ├── val.csv
+│       └── test.csv
 │
 ├── src/
+│   ├── data/                    (multi-dataset collection — see Dataset section)
+│   │   ├── base_dataset.py
+│   │   ├── registry.py
+│   │   ├── metadata.py
+│   │   ├── validate.py
+│   │   └── adapters/
 │   ├── preprocessing/
 │   ├── features/
 │   ├── modeling/
@@ -90,11 +112,54 @@ hybrid-deepfake-detector/
 
 ---
 
+# Dataset Collection Architecture
+
+Datasets are integrated through a common adapter interface
+(`src/data/base_dataset.py`) so adding a new dataset never requires
+touching the rest of the codebase — one adapter file, one line in the
+registry. Every downstream step (splitting, semantic/temporal
+preprocessing) talks only to `data/metadata/metadata.csv`, never to a raw
+dataset folder directly.
+
+| Dataset | Status | Access |
+|---|---|---|
+| Celeb-DF v2 | ✅ Enabled by default | Fully automated (KaggleHub) |
+| DFDC | ✅ Enabled | Automated after a one-time manual step: accept the [competition rules](https://www.kaggle.com/c/deepfake-detection-challenge/rules) on Kaggle. Uses the official sample set (`train_sample_videos.zip`) by default — full 470GB set available via `part_index`. |
+| FaceForensics++ | Wired in, disabled by default | **Manual only** — requires filling out [the official access form](https://docs.google.com/forms/d/e/1FAIpQLSdRRR3L5zAv6tQ_CKxmK4W96tAab_pfBu2EKAgQbeDVhmXagg/viewform) and waiting for approval. No API exists; this is the dataset owners' policy, not a limitation of this project. |
+| FakeAVCeleb | Wired in, disabled by default | **Manual only** — same pattern, [official request form](https://bit.ly/38prlVO) + Data Use Agreement review. |
+| GenVidBench | Wired in, disabled by default | Publicly downloadable (HuggingFace), but requires an explicit `hf_repo_id` in `config.yaml` — no single canonical repo ID could be confirmed at time of writing, so this is left to the user to verify at [genvidbench.github.io](https://genvidbench.github.io/) rather than guessed. |
+| Custom | Wired in, disabled by default | Drop videos into `data/raw/custom/{real,fake}/` — no code changes needed. |
+
+Enable/disable datasets in `config.yaml`:
+
+```yaml
+datasets:
+  celebdf: true
+  dfdc: true
+  faceforensics: false
+  fakeavceleb: false
+  genvidbench: false
+  custom: false
+```
+
+### Identity-aware splitting
+
+`create_splits.py` uses a union-find over each video's identity token(s)
+(comma-separated for videos referencing multiple identities, e.g. a
+source+target face swap) so that any two videos sharing an identity are
+transitively grouped and never land on opposite sides of the
+train/val/test boundary — this was a known gap in earlier versions of this
+project (video-level-only splitting) and is now enforced, with an internal
+sanity check that raises an error rather than silently writing leaked
+splits. Videos with no identity information (e.g. plain custom uploads)
+fall back to being their own singleton group, equivalent to a video-level
+split for exactly those rows.
+
+---
+
 # Dataset
 
-Current Dataset:
-
-**Celeb-DF v2**
+Currently enabled datasets: **Celeb-DF v2** and **DFDC** (sample set).
 
 Dataset is downloaded automatically using KaggleHub.
 
@@ -109,27 +174,39 @@ Dataset Structure
 ```
 data/
 └── raw/
-    └── celebdf/
-        ├── real/
-        └── fake/
+    ├── celebdf/
+    │   ├── real/
+    │   └── fake/
+    └── dfdc/
+        └── train_sample_videos/
+            ├── metadata.json
+            └── *.mp4
 ```
+
+Each additional enabled dataset gets its own subfolder under `data/raw/`,
+preserving its own native directory hierarchy rather than being flattened
+into a shared structure — see the Dataset Collection Architecture section
+above for the full list and access requirements per dataset.
 
 ---
 
 # Preprocessing Pipeline
 
-The preprocessing module converts raw videos into training-ready face images.
+The preprocessing module converts raw videos into training-ready face images, across every enabled dataset.
 
 Pipeline:
 
 ```
-Celeb-DF Videos
+Raw Videos (any enabled dataset)
         │
         ▼
-setup_dataset.py
+src/data/metadata.py           (scans every enabled adapter, writes metadata.csv)
         │
         ▼
-create_splits.py
+src/data/validate.py           (pre-flight validation report)
+        │
+        ▼
+create_splits.py               (identity-aware, multi-dataset, label-stratified)
         │
         ▼
 frame_sampler.py
@@ -138,33 +215,44 @@ frame_sampler.py
 face_detection.py
         │
         ▼
-precompute_faces.py
+precompute_faces.py / precompute_temporal.py
         │
         ▼
-semantic_faces/
+data/processed/semantic|temporal/<dataset>/
         │
         ▼
-image_loader.py
+image_loader.py / temporal_dataset.py
 ```
 
 ### Preprocessing Modules
+
+### src/data/ (dataset collection — see Dataset Collection Architecture above)
+
+- `base_dataset.py` — `BaseDatasetAdapter` interface + `VideoRecord` schema every adapter produces
+- `registry.py` — reads `config.yaml`'s `datasets:` section, instantiates only enabled adapters
+- `metadata.py` — calls every enabled adapter's `list_videos()`, writes `data/metadata/metadata.csv`
+- `validate.py` — checks the metadata for missing files, corrupted videos, duplicate rows, incorrect labels, invalid frame counts; writes `data/metadata/validation_report.json`
+- `adapters/` — one file per dataset (celebdf, dfdc, faceforensics, fakeavceleb, genvidbench, custom)
+
+---
 
 ### setup_dataset.py
 
 - Downloads Celeb-DF using KaggleHub
 - Organizes videos into Real/Fake folders
+- (Other datasets are downloaded via their own adapter — see `src/data/adapters/`)
 
 ---
 
 ### create_splits.py
 
-Creates
+Reads `data/metadata/metadata.csv` (across every enabled dataset) and creates
 
 - Train set
 - Validation set
 - Test set
 
-using an 80-10-10 split.
+using an identity-aware, label-stratified 80-10-10 split (`StratifiedGroupKFold` + union-find over identity tokens — see Dataset Collection Architecture above). Output CSVs include `video_path`, `dataset`, `identity`, `label`.
 
 ---
 
@@ -188,7 +276,7 @@ using an 80-10-10 split.
 
 ### precompute_faces.py
 
-One-time preprocessing step.
+One-time preprocessing step. Reads `data/metadata/metadata.csv` (not a hardcoded dataset path), so it works automatically across every enabled dataset with zero dataset-specific logic.
 
 Converts
 
@@ -202,13 +290,13 @@ Face Crop
 JPEG Image
 ```
 
-Training is performed on precomputed face images instead of videos, significantly reducing training time.
+Output is namespaced per dataset to avoid collisions: `data/processed/semantic/<dataset>/<original relative path>.jpg`. Training is performed on these precomputed face images instead of videos, significantly reducing training time. Resumable — already-cached videos are skipped on a rerun.
 
 ---
 
 ### image_loader.py
 
-Uses a custom CSV-driven `Dataset` that reads `data/splits/train.csv`, `val.csv`, and `test.csv` — no random re-splitting, so the same train/val/test boundaries are used everywhere in the pipeline.
+Uses a custom CSV-driven `Dataset` that reads `data/splits/train.csv`, `val.csv`, and `test.csv` — no random re-splitting, so the same train/val/test boundaries are used everywhere in the pipeline. Resolves each row's `(dataset, video_path)` pair to its namespaced precomputed face image.
 
 Returns
 
@@ -220,7 +308,7 @@ Returns
 
 ### precompute_temporal.py
 
-One-time preprocessing step for the temporal branch — mirrors `precompute_faces.py`'s caching pattern.
+One-time preprocessing step for the temporal branch — same metadata-driven, multi-dataset design as `precompute_faces.py`.
 
 Converts
 
@@ -234,13 +322,13 @@ Face Crop (per frame)
 Cached Sequence (.npy, shape [16, 224, 224, 3])
 ```
 
-Resumable — already-cached videos are skipped on a rerun, so an interrupted preprocessing run can pick up where it left off.
+Output: `data/processed/temporal/<dataset>/<original relative path>.npy`. Resumable — already-cached videos are skipped on a rerun, so an interrupted preprocessing run can pick up where it left off.
 
 ---
 
 ### temporal_dataset.py
 
-The temporal-branch equivalent of `image_loader.py`. Loads the cached `.npy` sequences using the same `train.csv`/`val.csv`/`test.csv` splits, so both branches train/validate/test on the exact same videos.
+The temporal-branch equivalent of `image_loader.py`. Loads the cached `.npy` sequences using the same `train.csv`/`val.csv`/`test.csv` splits and `(dataset, video_path)` resolution, so both branches train/validate/test on the exact same videos regardless of how many datasets are enabled.
 
 ---
 
@@ -333,7 +421,7 @@ Image Loader
 EfficientNet-B0
         │
         ▼
-CrossEntropy Loss
+Class-Weighted CrossEntropy Loss
         │
         ▼
 Adam Optimizer
@@ -342,13 +430,14 @@ Adam Optimizer
 Training includes
 
 - Mixed Precision Training (AMP)
-- Train → Validation each epoch, with the best checkpoint selected on **validation accuracy** (the test set is never used for model selection)
-- Automatic checkpoint saving
+- **Class-weighted loss** — Celeb-DF (and DFDC) are heavily imbalanced toward "fake" (~86%/14%); inverse-frequency class weights are computed from the training set each run and applied to `CrossEntropyLoss`, so misclassifying the minority "real" class costs proportionally more. Without this, the model can (and, in an earlier unweighted run, did) collapse to predicting "fake" almost always — ~86% accuracy while catching only 3% of real videos.
+- Train → Validation each epoch, with the best checkpoint selected on **validation macro-F1** (not raw accuracy — accuracy alone rewards exactly the majority-class collapse above; macro-F1 is the average of each class's own F1, so it can't be gamed by ignoring the minority class). Balanced accuracy is also computed and logged as an easy sanity check. The test set is never used for model selection.
+- Automatic checkpoint saving (guaranteed to save at least once per run, even in a degenerate all-zero-F1 edge case)
 
 The temporal branch's training additionally includes:
 
-- Early stopping (patience-based)
-- Learning-rate scheduling (`ReduceLROnPlateau`)
+- Early stopping (patience-based, tracking macro-F1)
+- Learning-rate scheduling (`ReduceLROnPlateau`, tracking macro-F1)
 - Progress bars and file-based logging (`saved_models/train_temporal.log`)
 
 ---
@@ -364,7 +453,7 @@ Metrics reported (both branches)
 - Recall
 - F1-Score
 - Confusion Matrix
-- Classification Report
+- Classification Report (per-class precision/recall/F1 — check this, not just top-line accuracy, given the dataset's class imbalance)
 - ROC-AUC (temporal branch)
 
 Results are printed to console and saved as JSON:
@@ -411,7 +500,9 @@ saved_models/
 ### Dataset
 
 - Celeb-DF v2
+- DFDC
 - KaggleHub
+- HuggingFace Hub (for GenVidBench)
 
 ---
 
@@ -420,21 +511,22 @@ saved_models/
 ## Completed
 
 - Project structure
-- Dataset setup
-- CSV-based train/validation/test split pipeline
+- Multi-dataset collection architecture (adapter interface, registry, metadata generation, validation) — Celeb-DF v2 and DFDC enabled
+- Identity-aware, leakage-safe, multi-dataset train/validation/test split pipeline
 - Frame sampling
-- Face detection (MTCNN)
-- Face preprocessing (semantic + temporal, both resumable)
+- Face detection (MTCNN, GPU-aware)
+- Face preprocessing (semantic + temporal, both resumable, dataset-namespaced)
 - EfficientNet-B0 semantic classifier, exposing embeddings
 - CNN (ResNet-18) + LSTM temporal classifier, exposing embeddings
-- Validation-based checkpointing (both branches)
-- Full evaluation metrics incl. ROC-AUC
+- Class-imbalance-aware training (weighted loss, macro-F1 model selection) for both branches
+- Full evaluation metrics incl. macro-F1, balanced accuracy, ROC-AUC
 - Model checkpointing
 
 ---
 
 ## In Progress
 
+- Retraining both branches under the new multi-dataset, identity-aware splits (previous checkpoints/metrics were produced under the older, non-identity-aware Celeb-DF-only split and should be treated as superseded once this completes)
 - Feature Fusion design
 
 ---
@@ -512,7 +604,19 @@ Install dependencies
 pip install -r requirements.txt
 ```
 
-Download dataset
+Configure which datasets are enabled in `config.yaml` (`celebdf` and `dfdc` are enabled by default):
+
+```yaml
+datasets:
+  celebdf: true
+  dfdc: true
+  faceforensics: false
+  fakeavceleb: false
+  genvidbench: false
+  custom: false
+```
+
+Download enabled datasets — Celeb-DF is automated:
 
 ```python
 import kagglehub
@@ -520,11 +624,26 @@ import kagglehub
 kagglehub.dataset_download("reubensuju/celeb-df-v2")
 ```
 
+DFDC requires accepting the [competition rules](https://www.kaggle.com/c/deepfake-detection-challenge/rules) once in a browser first, then:
+
+```python
+from src.data.adapters.dfdc import DFDCAdapter
+DFDCAdapter().download(part_index="sample")
+```
+
+FaceForensics++/FakeAVCeleb require manual approval — see the Dataset Collection Architecture section above for the official request forms and expected folder layout once you have the data. GenVidBench and custom datasets are documented there too.
+
+Generate metadata, validate, and create splits (across every enabled dataset):
+
+```bash
+python -m src.data.metadata
+python -m src.data.validate
+python -m src.preprocessing.create_splits
+```
+
 Run preprocessing
 
 ```bash
-python -m src.preprocessing.setup_dataset
-python -m src.preprocessing.create_splits
 python -m src.preprocessing.precompute_faces
 python -m src.preprocessing.precompute_temporal
 ```
@@ -549,12 +668,15 @@ python -m src.modeling.test_temporal
 
 - [x] Project setup
 - [x] Dataset preparation
+- [x] Multi-dataset collection architecture (Celeb-DF v2 + DFDC enabled)
+- [x] Identity-aware, leakage-safe splitting
 - [x] Frame sampling
 - [x] Face detection
 - [x] Semantic feature extraction
-- [x] Semantic model training
+- [x] Semantic model training (class-imbalance-aware)
 - [x] Semantic model evaluation
 - [x] Temporal feature extraction
+- [ ] Retrain both branches under new multi-dataset splits
 - [ ] Feature fusion
 - [ ] Hybrid classifier
 - [ ] Video inference

@@ -3,6 +3,7 @@ import os
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from sklearn.metrics import (
     accuracy_score,
     classification_report,
@@ -10,13 +11,14 @@ from sklearn.metrics import (
     f1_score,
     precision_score,
     recall_score,
+    roc_auc_score,
 )
 
-from src.features.semantic_extractor import SemanticClassifier
-from src.preprocessing.image_loader import get_dataloaders
+from src.features.temporal_extractor import TemporalClassifier
+from src.preprocessing.temporal_dataset import get_dataloaders
 
-CHECKPOINT_PATH = "saved_models/semantic_checkpoint.pth"
-REPORT_PATH = "saved_models/test_evaluation_report.json"
+CHECKPOINT_PATH = "saved_models/temporal_checkpoint.pth"
+REPORT_PATH = "saved_models/test_temporal_evaluation_report.json"
 
 CLASS_NAMES = ["real", "fake"]  # label 0 = real, label 1 = fake
 
@@ -25,10 +27,10 @@ def load_model(device):
     if not os.path.exists(CHECKPOINT_PATH):
         raise FileNotFoundError(
             f"No checkpoint found at {CHECKPOINT_PATH}. "
-            f"Run `python -m src.modeling.train_semantic` first."
+            f"Run `python -m src.modeling.train_temporal` first."
         )
 
-    model = SemanticClassifier().to(device)
+    model = TemporalClassifier().to(device)
     checkpoint = torch.load(CHECKPOINT_PATH, map_location=device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
@@ -44,27 +46,34 @@ def load_model(device):
 def run_inference(model, loader, device):
     all_preds = []
     all_labels = []
+    all_fake_probs = []
 
-    for images, labels in loader:
-        images = images.to(device)
-        _, logits = model(images)
+    for sequences, labels in loader:
+        sequences = sequences.to(device)
+        _, logits = model(sequences)
+
+        probs = F.softmax(logits, dim=1)
+        fake_probs = probs[:, 1].cpu().numpy()  # P(fake)
         preds = torch.argmax(logits, dim=1).cpu().numpy()
 
         all_preds.extend(preds.tolist())
         all_labels.extend(labels.numpy().tolist())
+        all_fake_probs.extend(fake_probs.tolist())
 
-    return np.array(all_labels), np.array(all_preds)
+    return (
+        np.array(all_labels),
+        np.array(all_preds),
+        np.array(all_fake_probs),
+    )
 
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Test set is loaded here for the first and only time in the whole
-    # pipeline — training and model selection never see it.
-    _, _, test_loader = get_dataloaders(batch_size=16)
+    _, _, test_loader = get_dataloaders(batch_size=8)
     model = load_model(device)
 
-    all_labels, all_preds = run_inference(model, test_loader, device)
+    all_labels, all_preds, all_fake_probs = run_inference(model, test_loader, device)
 
     accuracy = accuracy_score(all_labels, all_preds)
     precision = precision_score(all_labels, all_preds, zero_division=0)
@@ -75,13 +84,24 @@ def main():
         all_labels, all_preds, target_names=CLASS_NAMES, zero_division=0
     )
 
+    # ROC-AUC needs both classes present in the test set to be defined.
+    if len(np.unique(all_labels)) == 2:
+        roc_auc = roc_auc_score(all_labels, all_fake_probs)
+    else:
+        roc_auc = None
+        print(
+            "\n[Warning] ROC-AUC skipped: test set contains only one class. "
+            "Check data/splits/test.csv."
+        )
+
     print("\n" + "=" * 55)
-    print("FINAL TEST SET EVALUATION (run once, after model selection)")
+    print("TEMPORAL BRANCH — FINAL TEST SET EVALUATION")
     print("=" * 55)
     print(f"Accuracy:  {accuracy:.4f}")
     print(f"Precision: {precision:.4f}")
     print(f"Recall:    {recall:.4f}")
     print(f"F1 Score:  {f1:.4f}")
+    print(f"ROC-AUC:   {roc_auc:.4f}" if roc_auc is not None else "ROC-AUC:   N/A")
     print(f"\nConfusion Matrix (rows=true, cols=pred) {CLASS_NAMES}:")
     print(cm)
     print("\nClassification Report:")
@@ -94,6 +114,7 @@ def main():
             "precision": precision,
             "recall": recall,
             "f1_score": f1,
+            "roc_auc": roc_auc,
             "confusion_matrix": cm.tolist(),
             "classification_report": report,
         }, f, indent=2)

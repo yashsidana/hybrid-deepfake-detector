@@ -10,3 +10,4 @@ pillow
 tqdm
 scipy
 pandas
+kagglehub

@@ -19,6 +19,12 @@ def process_class(class_name):
         if not video.endswith(".mp4"):
             continue
 
+        save_name = video.replace(".mp4", ".jpg")
+        save_path = os.path.join(output_dir, save_name)
+
+        if os.path.exists(save_path):
+            continue  # already cached from a previous run — resumable
+
         video_path = os.path.join(input_dir, video)
 
         # Only sample ONE key frame
@@ -31,12 +37,7 @@ def process_class(class_name):
 
         face = detect_face(frame)
 
-        save_name = video.replace(".mp4", ".jpg")
-
-        cv2.imwrite(
-            os.path.join(output_dir, save_name),
-            face
-        )
+        cv2.imwrite(save_path, face)
 
 
 if __name__ == "__main__":

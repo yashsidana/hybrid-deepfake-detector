@@ -11,7 +11,7 @@ data:
   image_size: 224
 datasets:
   celebdf: true
-  dfdc: false
+  dfdc: true
   faceforensics: false
   fakeavceleb: false
   genvidbench: false

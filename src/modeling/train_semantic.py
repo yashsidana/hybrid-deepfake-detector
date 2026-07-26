@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.cuda.amp import GradScaler, autocast
+from tqdm import tqdm
 
 from src.features.semantic_extractor import SemanticClassifier
 from src.preprocessing.image_loader import get_dataloaders
@@ -52,7 +53,7 @@ def main():
         train_correct = 0
         train_total = 0
 
-        for images, labels in train_loader:
+        for images, labels in tqdm(train_loader, desc=f"Epoch {epoch + 1}/{epochs}", leave=False):
             images, labels = images.to(device), labels.to(device)
 
             optimizer.zero_grad()

@@ -6,6 +6,13 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 
+# Windows' spawn-based multiprocessing re-imports torch/torchvision from
+# scratch in every worker process, which is slow to start and fragile to
+# interrupt (Ctrl+C during worker spawn can leave the process looking
+# "stuck"). Default to 0 workers there; Linux/Colab can fork cheaply, so
+# keep parallel loading on those platforms. Always overridable explicitly.
+_DEFAULT_NUM_WORKERS = 0 if os.name == "nt" else 2
+
 # Root where precompute_temporal.py writes cached face sequences:
 #   data/processed/temporal_faces/real/<video_stem>.npy
 #   data/processed/temporal_faces/fake/<video_stem>.npy
@@ -87,7 +94,7 @@ class TemporalSequenceDataset(Dataset):
         return sequence, torch.tensor(label, dtype=torch.long)
 
 
-def get_dataloaders(batch_size=8, num_workers=2, splits_root=SPLITS_ROOT):
+def get_dataloaders(batch_size=8, num_workers=_DEFAULT_NUM_WORKERS, splits_root=SPLITS_ROOT):
     """
     Returns (train_loader, val_loader, test_loader) for the temporal branch,
     backed by the same CSVs as the semantic branch's get_dataloaders().

@@ -1,4 +1,4 @@
-# Hybrid Deepfake detector
+# Hybrid Deepfake Detector
 
 A modular AI-based Hybrid Deepfake Detection System that combines **Semantic Feature Extraction**, **Temporal Feature Extraction**, and **Feature Fusion** to accurately classify videos as **Real** or **Fake**.
 

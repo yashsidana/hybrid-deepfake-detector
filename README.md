@@ -2,7 +2,7 @@
 
 A modular AI-based Hybrid Deepfake Detection System that combines **Semantic Feature Extraction**, **Temporal Feature Extraction**, and **Feature Fusion** to accurately classify videos as **Real** or **Fake**.
 
-> **Current Status:** Phase 2 (Temporal Feature Extraction) Completed + Multi-Dataset Data Pipeline Completed — Feature Fusion next
+> **Current Status:** Semantic + Temporal + Feature Fusion (hybrid SVM classifier) + Handcrafted Forensic Features (SRM, texture, landmark motion, rPPG) + Web API all implemented. Retraining under the new multi-dataset splits and end-to-end validation on real data (GPU access pending) is next.
 
 ---
 
@@ -35,7 +35,7 @@ Semantic Feature Extraction
 Temporal Feature Extraction
         │
         ▼
-Feature Fusion (Upcoming)
+Feature Fusion (Semantic + Temporal + Forensic + Distribution Matching)
         │
         ▼
 Binary Classification
@@ -59,6 +59,9 @@ Real / Fake + Confidence Score
 - Mixed Precision (AMP) Training
 - Checkpoint saving
 - Full evaluation metrics (accuracy, precision, recall, F1, macro-F1, balanced accuracy, ROC-AUC, confusion matrix)
+- Handcrafted forensic feature extraction: SRM (Spatial Rich Model) filtering, statistical texture (LBP), facial landmark motion analysis, rPPG (remote photoplethysmography)
+- Feature fusion: semantic + temporal + forensic embeddings, adaptive branch weighting, distribution matching (Ledoit-Wolf shrinkage Mahalanobis distance from the learned "real" media distribution), SVM hybrid classifier
+- Web-based inference API (FastAPI) with a minimal upload UI — video in, real/fake probability score out
 
 ---
 
@@ -79,7 +82,9 @@ hybrid-deepfake-detector/
 │   │   └── custom/
 │   ├── processed/
 │   │   ├── semantic/<dataset>/  (precomputed face images)
-│   │   └── temporal/<dataset>/  (precomputed 16-frame sequences)
+│   │   ├── temporal/<dataset>/  (precomputed 16-frame sequences)
+│   │   ├── forensic/<dataset>/  (precomputed handcrafted forensic vectors)
+│   │   └── fusion/               (train/val/test.npz -- cached branch embeddings)
 │   ├── metadata/
 │   │   ├── metadata.csv         (single source of truth across all enabled datasets)
 │   │   └── validation_report.json
@@ -95,14 +100,15 @@ hybrid-deepfake-detector/
 │   │   ├── metadata.py
 │   │   ├── validate.py
 │   │   └── adapters/
-│   ├── preprocessing/
-│   ├── features/
-│   ├── modeling/
-│   ├── inference/
-│   ├── api/
+│   ├── preprocessing/            (frame sampling, face detection, splits, precompute_*.py)
+│   ├── features/                 (semantic_extractor.py, temporal_extractor.py,
+│   │                               forensic_extractor.py, fusion.py)
+│   ├── modeling/                 (train_*.py / test_*.py per branch, extract_embeddings.py)
+│   ├── api/                      (app.py -- FastAPI server, inference.py -- live pipeline)
 │   └── tests/
 │
-├── saved_models/
+├── saved_models/                  (checkpoints + evaluation reports -- gitignored)
+├── models/                        (trained fusion classifier -- gitignored)
 │
 ├── notebooks/
 │
@@ -403,7 +409,65 @@ Fully Connected Layer
 Binary Classification
 ```
 
-Both the semantic and temporal branches expose a 256-dimensional embedding (`embedding, logits = model(x)`), by design — this is what Feature Fusion (Phase 3) will concatenate into a 512-dimensional fused vector.
+Both the semantic and temporal branches expose a 256-dimensional embedding (`embedding, logits = model(x)`), by design — this is what Feature Fusion concatenates into a 512+-dimensional fused vector (see below).
+
+---
+
+# Handcrafted Forensic Feature Extraction
+
+`src/features/forensic_extractor.py`. Four signal families, concatenated into one 63-dimensional forensic embedding per video:
+
+| Signal | What it captures | Notes |
+|---|---|---|
+| SRM filtering | Mid-frequency noise-residual statistics (6-kernel reduced Spatial Rich Model bank: 1st/2nd-order + SQUARE3x3 + KV, 4 stats each) | Robust to H.264/H.265 compression in a way raw high-frequency FFT analysis isn't |
+| Statistical texture | 16-bin LBP histogram + entropy + first-order intensity stats | |
+| Facial landmark motion | Tracks 5-point MTCNN landmarks (eyes, nose, mouth corners) across the cached 16-frame sequence, summarizes motion/jitter | Reuses the existing MTCNN dependency instead of adding dlib/mediapipe |
+| rPPG | Detects a genuine physiological pulse signal via band-pass-filtered facial green-channel variation | Reads the **raw video** directly for a dense ~5s window — the cached 16-frame sequence is sampled across the *entire* video and is too temporally sparse to resolve a ~1-2Hz heartbeat signal (aliasing) |
+
+Landmark motion and rPPG each carry a validity flag rather than silently zero-filling on failure, so the fusion classifier can learn to discount features that didn't extract cleanly on a given video (e.g. an extreme head angle, or a video too short for a 5s rPPG window).
+
+`precompute_forensic.py` caches these per video to `data/processed/forensic/<dataset>/<video>.npy`, the same resumable pattern as `precompute_faces.py` / `precompute_temporal.py`. Requires those two to have already run.
+
+---
+
+# Feature Fusion (Hybrid Classifier)
+
+`src/features/fusion.py`, `src/modeling/extract_embeddings.py`, `train_fusion.py`, `test_fusion.py` — this is what actually makes the system "hybrid": combining the semantic, temporal, and forensic branches into one classifier, per the proposal's Methodology sections 4-7.
+
+```
+Semantic Embedding [256] ─┐
+Temporal Embedding [256] ─┼─▶ Weighted Concatenation ─▶ Distribution Matching ─▶ StandardScaler ─▶ SVM ─▶ Real / Fake + Probability
+Forensic Embedding [63]  ─┘         (build_fused_vector)   (DistributionMatcher)
+```
+
+1. **`extract_embeddings.py`** runs the trained semantic + temporal checkpoints over every video in train/val/test and caches their embeddings (plus the precomputed forensic vector, zero-filled if not yet available for a given video) to `data/processed/fusion/*.npz`.
+2. **Distribution matching** (`DistributionMatcher`): learns the distribution of the fused embedding space for **real** media only from the training set, using Ledoit-Wolf shrinkage covariance estimation (needed because real-class training examples can be fewer than the embedding dimensionality — a plain sample covariance is singular in that regime). Every sample's Mahalanobis distance from that learned "real" distribution is appended as one extra feature.
+3. **`train_fusion.py`** grid-searches an SVM (`class_weight="balanced"`, scored on validation macro-F1 — the same imbalance-aware model-selection rationale as the semantic/temporal branches) and saves the fitted SVM + scaler + distribution matcher bundle to `models/fusion_classifier/fusion_model.pkl`.
+4. **`test_fusion.py`** runs the one-time, held-out final evaluation, same metrics/report pattern as the other two branches.
+
+Branch weighting (`config.yaml`'s `models.fusion.semantic_weight` / `temporal_weight` / `forensic_weight`) is currently static; the code is structured to accept per-sample adaptive weights (e.g. down-weighting frequency-domain forensic features when heavy compression is detected) without further changes once that signal exists.
+
+---
+
+# Web-Based Inference API
+
+`src/api/app.py` (FastAPI) + `src/api/inference.py` (pipeline orchestration) — proposal objective 5.
+
+Run it:
+
+```bash
+python -m src.api.app
+# or: uvicorn src.api.app:app --reload
+```
+
+- `GET /` — minimal drag-and-drop upload page
+- `GET /health` — liveness check (doesn't trigger model loading)
+- `POST /predict` — accepts a video file (`.mp4`/`.avi`/`.mov`/`.mkv`, ≤200MB), runs it through face detection → semantic + temporal + forensic feature extraction → fusion classifier, returns:
+  ```json
+  { "prediction": "fake", "fake_probability": 0.87, "real_probability": 0.13 }
+  ```
+
+Requires `saved_models/semantic_checkpoint.pth`, `saved_models/temporal_checkpoint.pth`, and `models/fusion_classifier/fusion_model.pkl` to already exist (trained via the pipeline above) — returns a `503` with a clear message if any are missing, rather than a crash. Models are loaded once per process and reused across requests.
 
 ---
 
@@ -497,6 +561,11 @@ saved_models/
 
 - Scikit-learn
 
+### Web / API
+
+- FastAPI
+- Uvicorn
+
 ### Dataset
 
 - Celeb-DF v2
@@ -521,24 +590,24 @@ saved_models/
 - Class-imbalance-aware training (weighted loss, macro-F1 model selection) for both branches
 - Full evaluation metrics incl. macro-F1, balanced accuracy, ROC-AUC
 - Model checkpointing
+- Handcrafted forensic feature extraction (SRM, statistical texture, landmark motion, rPPG)
+- Feature fusion: embedding extraction, distribution matching, SVM hybrid classifier
+- Video inference pipeline (single-video, end-to-end)
+- Web-based inference API (FastAPI) + minimal upload UI
 
 ---
 
 ## In Progress
 
-- Retraining both branches under the new multi-dataset, identity-aware splits (previous checkpoints/metrics were produced under the older, non-identity-aware Celeb-DF-only split and should be treated as superseded once this completes)
-- Feature Fusion design
+- Retraining all branches under the new multi-dataset, identity-aware splits and validating end-to-end on real data (GPU access pending — code has been reviewed and, where possible without a GPU, sanity-tested against synthetic data; a full real-data run is the next step)
+- DFDC download blocked pending Kaggle competition-rules acceptance for the training account
 
 ---
 
 ## Upcoming
 
-- Feature Fusion implementation
-- Final Hybrid Model
-- Video Inference Pipeline
-- REST API
-- Web Interface
-- Confidence Score Visualization
+- Confidence Score Visualization (richer than the raw probability the API currently returns)
+- Deployment
 
 ---
 
@@ -662,6 +731,27 @@ python -m src.modeling.train_temporal
 python -m src.modeling.test_temporal
 ```
 
+Precompute handcrafted forensic features (requires the two steps above to have already run)
+
+```bash
+python -m src.preprocessing.precompute_forensic
+```
+
+Extract fused embeddings, train and evaluate the hybrid fusion classifier
+
+```bash
+python -m src.modeling.extract_embeddings
+python -m src.modeling.train_fusion
+python -m src.modeling.test_fusion
+```
+
+Run the web inference API
+
+```bash
+python -m src.api.app
+# then open http://localhost:8000
+```
+
 ---
 
 # Roadmap
@@ -676,12 +766,12 @@ python -m src.modeling.test_temporal
 - [x] Semantic model training (class-imbalance-aware)
 - [x] Semantic model evaluation
 - [x] Temporal feature extraction
-- [ ] Retrain both branches under new multi-dataset splits
-- [ ] Feature fusion
-- [ ] Hybrid classifier
-- [ ] Video inference
-- [ ] REST API
-- [ ] Web interface
+- [x] Handcrafted forensic feature extraction (SRM, texture, landmark motion, rPPG)
+- [x] Feature fusion (distribution matching + SVM hybrid classifier)
+- [x] Video inference pipeline
+- [x] REST API
+- [x] Web interface
+- [ ] Retrain all branches under new multi-dataset splits + validate end-to-end on real data
 - [ ] Deployment
 
 ---

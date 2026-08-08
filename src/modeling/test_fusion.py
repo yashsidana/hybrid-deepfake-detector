@@ -31,15 +31,28 @@ REPORT_PATH = "saved_models/test_fusion_evaluation_report.json"
 CLASS_NAMES = ["real", "fake"]
 
 
-def _fuse_with_bundle(semantic_emb, temporal_emb, bundle):
+def _fuse_with_bundle(semantic_emb, temporal_emb, forensic_emb, bundle):
     matcher = bundle["distribution_matcher"]
     semantic_weight = bundle["semantic_weight"]
     temporal_weight = bundle["temporal_weight"]
+    # forensic_weight/uses_forensic: added when the forensic branch landed.
+    # .get() with defaults so a fusion_model.pkl trained before that change
+    # still loads and evaluates correctly (semantic+temporal only).
+    forensic_weight = bundle.get("forensic_weight", 1.0)
+    uses_forensic = bundle.get("uses_forensic", False)
 
-    base = build_fused_vector(semantic_emb, temporal_emb, semantic_weight, temporal_weight)
+    forensic_arg = forensic_emb if uses_forensic else None
+
+    base = build_fused_vector(
+        semantic_emb, temporal_emb,
+        semantic_weight=semantic_weight, temporal_weight=temporal_weight,
+        forensic_embeddings=forensic_arg, forensic_weight=forensic_weight,
+    )
     distribution_scores = matcher.score(base)
     return build_fused_vector(
-        semantic_emb, temporal_emb, semantic_weight, temporal_weight,
+        semantic_emb, temporal_emb,
+        semantic_weight=semantic_weight, temporal_weight=temporal_weight,
+        forensic_embeddings=forensic_arg, forensic_weight=forensic_weight,
         distribution_scores=distribution_scores,
     )
 
@@ -59,12 +72,13 @@ def main():
     semantic_emb, temporal_emb, labels = (
         data["semantic_embeddings"], data["temporal_embeddings"], data["labels"]
     )
+    forensic_emb = data["forensic_embeddings"] if "forensic_embeddings" in data.files else None
 
     bundle = joblib.load(MODEL_PATH)
     svm = bundle["svm"]
     scaler = bundle["scaler"]
 
-    fused = _fuse_with_bundle(semantic_emb, temporal_emb, bundle)
+    fused = _fuse_with_bundle(semantic_emb, temporal_emb, forensic_emb, bundle)
     fused_scaled = scaler.transform(fused)
 
     preds = svm.predict(fused_scaled)

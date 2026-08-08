@@ -50,3 +50,61 @@ def detect_face(frame):
     face_bgr = cv2.cvtColor(face_rgb, cv2.COLOR_RGB2BGR)
 
     return face_bgr
+
+
+
+def detect_face_box(frame):
+    """
+    Returns (x1, y1, x2, y2) pixel coordinates of the largest detected face
+    in `frame`, or None if no face is found.
+
+    Unlike detect_face() above, this takes a raw numpy frame straight from
+    cv2.VideoCapture.read() (BGR, uint8, native resolution -- NOT the
+    [3, 224, 224] float tensor detect_face() expects) and returns a
+    location rather than a resized crop. Used by forensic_extractor.py's
+    rPPG feature, which needs a fixed region to average color over across
+    several consecutive raw frames.
+
+    Reuses the same module-level MTCNN instance as detect_face() -- no
+    second copy of the model's weights loaded.
+    """
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    boxes, _ = _mtcnn.detect(rgb)
+
+    if boxes is None or len(boxes) == 0:
+        return None
+
+    # .detect() doesn't itself apply select_largest -- pick the largest
+    # box explicitly so behavior matches the rest of this module's intent.
+    areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+    x1, y1, x2, y2 = boxes[int(areas.argmax())]
+
+    h, w = frame.shape[:2]
+    x1, y1 = max(0, int(x1)), max(0, int(y1))
+    x2, y2 = min(w, int(x2)), min(h, int(y2))
+
+    if x2 <= x1 or y2 <= y1:
+        return None
+
+    return (x1, y1, x2, y2)
+
+
+def detect_landmarks(frame):
+    """
+    Returns a [5, 2] float array of (x, y) facial landmark coordinates --
+    left eye, right eye, nose, left mouth corner, right mouth corner, in
+    that order (facenet-pytorch's MTCNN convention) -- for the largest
+    detected face in `frame` (BGR, uint8, native resolution), or None if
+    no face is found. Used by forensic_extractor.py's landmark motion
+    feature.
+    """
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    boxes, _, landmarks = _mtcnn.detect(rgb, landmarks=True)
+
+    if boxes is None or landmarks is None or len(landmarks) == 0:
+        return None
+
+    areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+    idx = int(areas.argmax())
+
+    return landmarks[idx]

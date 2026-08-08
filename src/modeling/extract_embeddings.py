@@ -14,11 +14,21 @@ precomputed face sequence (temporal) are included — a row missing either
 one is dropped and counted, since fusion structurally needs both branches'
 embeddings for the same video.
 
+Forensic (handcrafted) embeddings from precompute_forensic.py are included
+too when available -- if a video's forensic vector hasn't been computed
+yet (e.g. precompute_forensic.py hasn't been run at all, or failed on
+that specific video), a zero vector of the correct length is used instead
+of dropping the video, so fusion training doesn't lose semantic+temporal
+data just because the forensic branch is still catching up. See
+src/features/fusion.py's build_fused_vector() for how the zero-fallback
+interacts with the fused vector.
+
 Output: data/processed/fusion/<split>.npz, each containing:
-    semantic_embeddings   [N, 256] float32
-    temporal_embeddings   [N, 256] float32
-    labels                [N]      int64
-    video_paths           [N]      object (str) — "<dataset>/<video_path>", for traceability
+    semantic_embeddings    [N, 256]                  float32
+    temporal_embeddings    [N, 256]                  float32
+    forensic_embeddings    [N, FORENSIC_VECTOR_DIM]   float32
+    labels                 [N]                        int64
+    video_paths             [N]                        object (str) — "<dataset>/<video_path>", for traceability
 """
 
 import os
@@ -32,10 +42,12 @@ from tqdm import tqdm
 
 from src.features.semantic_extractor import SemanticClassifier
 from src.features.temporal_extractor import TemporalClassifier
+from src.features.forensic_extractor import FORENSIC_VECTOR_DIM
 
 SPLITS_ROOT = "data/splits"
 FACES_ROOT = "data/processed/semantic"
 SEQUENCES_ROOT = "data/processed/temporal"
+FORENSIC_ROOT = "data/processed/forensic"
 OUTPUT_ROOT = "data/processed/fusion"
 
 SEMANTIC_CHECKPOINT = "saved_models/semantic_checkpoint.pth"
@@ -101,6 +113,23 @@ def _load_temporal_input(dataset, video_path):
     return sequence
 
 
+def _load_forensic_input(dataset, video_path):
+    """
+    Returns the precomputed forensic feature vector (numpy, not a tensor --
+    this branch has no learned model to run inputs through, unlike
+    semantic/temporal) for (dataset, video_path), or a zero vector of the
+    correct length if precompute_forensic.py hasn't produced one for this
+    video yet. Never returns None -- forensic availability is optional and
+    handled here, not by dropping the sample the way missing semantic/
+    temporal data does in extract_split() below.
+    """
+    stem = video_path.replace(".mp4", ".npy")
+    forensic_path = os.path.join(FORENSIC_ROOT, dataset, stem)
+    if not os.path.exists(forensic_path):
+        return np.zeros(FORENSIC_VECTOR_DIM, dtype=np.float32)
+    return np.load(forensic_path).astype(np.float32)
+
+
 @torch.no_grad()
 def extract_split(split_name, semantic_model, temporal_model, device,
                    splits_root=SPLITS_ROOT, batch_size=16):
@@ -112,14 +141,15 @@ def extract_split(split_name, semantic_model, temporal_model, device,
 
     df = pd.read_csv(csv_path)
 
-    semantic_chunks, temporal_chunks = [], []
+    semantic_chunks, temporal_chunks, forensic_chunks = [], [], []
     labels, video_paths = [], []
     skipped = 0
+    forensic_missing = 0
 
-    semantic_batch, temporal_batch, label_batch, path_batch = [], [], [], []
+    semantic_batch, temporal_batch, forensic_batch, label_batch, path_batch = [], [], [], [], []
 
     def _flush():
-        nonlocal semantic_batch, temporal_batch, label_batch, path_batch
+        nonlocal semantic_batch, temporal_batch, forensic_batch, label_batch, path_batch
         if not semantic_batch:
             return
         sem_tensor = torch.stack(semantic_batch).to(device)
@@ -130,10 +160,11 @@ def extract_split(split_name, semantic_model, temporal_model, device,
 
         semantic_chunks.append(sem_emb.cpu().numpy())
         temporal_chunks.append(temp_emb.cpu().numpy())
+        forensic_chunks.append(np.stack(forensic_batch, axis=0))
         labels.extend(label_batch)
         video_paths.extend(path_batch)
 
-        semantic_batch, temporal_batch, label_batch, path_batch = [], [], [], []
+        semantic_batch, temporal_batch, forensic_batch, label_batch, path_batch = [], [], [], [], []
 
     for _, row in tqdm(df.iterrows(), total=len(df), desc=f"Embedding [{split_name}]"):
         dataset, video_path, label = row["dataset"], row["video_path"], int(row["label"])
@@ -145,8 +176,14 @@ def extract_split(split_name, semantic_model, temporal_model, device,
             skipped += 1
             continue
 
+        forensic_path = os.path.join(FORENSIC_ROOT, dataset, video_path.replace(".mp4", ".npy"))
+        if not os.path.exists(forensic_path):
+            forensic_missing += 1
+        forensic_input = _load_forensic_input(dataset, video_path)
+
         semantic_batch.append(semantic_input)
         temporal_batch.append(temporal_input)
+        forensic_batch.append(forensic_input)
         label_batch.append(label)
         path_batch.append(f"{dataset}/{video_path}")
 
@@ -160,6 +197,12 @@ def extract_split(split_name, semantic_model, temporal_model, device,
             f"[{split_name}] Skipped {skipped} video(s) missing a "
             f"precomputed semantic face and/or temporal sequence."
         )
+    if forensic_missing:
+        print(
+            f"[{split_name}] {forensic_missing} video(s) had no precomputed "
+            f"forensic vector -- zero-filled instead of dropped. Run "
+            f"`python -m src.preprocessing.precompute_forensic` to fill these in."
+        )
 
     if not semantic_chunks:
         raise RuntimeError(
@@ -171,6 +214,7 @@ def extract_split(split_name, semantic_model, temporal_model, device,
     return {
         "semantic_embeddings": np.concatenate(semantic_chunks, axis=0),
         "temporal_embeddings": np.concatenate(temporal_chunks, axis=0),
+        "forensic_embeddings": np.concatenate(forensic_chunks, axis=0),
         "labels": np.array(labels, dtype=np.int64),
         "video_paths": np.array(video_paths, dtype=object),
     }
@@ -190,13 +234,15 @@ def main():
             out_path,
             semantic_embeddings=result["semantic_embeddings"],
             temporal_embeddings=result["temporal_embeddings"],
+            forensic_embeddings=result["forensic_embeddings"],
             labels=result["labels"],
             video_paths=result["video_paths"],
         )
         print(
             f"[{split_name}] {len(result['labels'])} embeddings saved to {out_path} "
             f"(semantic {result['semantic_embeddings'].shape}, "
-            f"temporal {result['temporal_embeddings'].shape})"
+            f"temporal {result['temporal_embeddings'].shape}, "
+            f"forensic {result['forensic_embeddings'].shape})"
         )
 
     print("\nRun `python -m src.modeling.train_fusion` next.")

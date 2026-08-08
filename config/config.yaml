@@ -22,6 +22,12 @@ preprocessing:
   temporal:
     optical_flow_method: farneback
     num_frames: 16
+  forensic:
+    # rPPG reads the raw video directly (not the cached temporal sequence)
+    # for a denser, short frame window -- see
+    # src/features/forensic_extractor.py's rppg_features() docstring.
+    rppg_window_seconds: 5.0
+    rppg_max_frames: 150
 models:
   semantic:
     weights_path: models/semantic/deepfake_model.pth
@@ -43,6 +49,7 @@ models:
     # src/features/fusion.py's build_fused_vector() docstring.
     semantic_weight: 1.0
     temporal_weight: 1.0
+    forensic_weight: 1.0
     svm:
       kernel: rbf
       C_grid: [0.1, 1, 10, 100]

@@ -36,6 +36,16 @@ models:
   fusion:
     classifier_type: svm
     model_path: models/fusion_classifier/fusion_model.pkl
+    embeddings_dir: data/processed/fusion
+    # Static weighting for now (each branch embedding scaled by this factor
+    # before concatenation). Becomes per-sample/adaptive once
+    # forensic_extractor.py's compression detector lands -- see
+    # src/features/fusion.py's build_fused_vector() docstring.
+    semantic_weight: 1.0
+    temporal_weight: 1.0
+    svm:
+      kernel: rbf
+      C_grid: [0.1, 1, 10, 100]
 training:
   batch_size: 16
   learning_rate: 0.001

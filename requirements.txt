@@ -12,3 +12,4 @@ scipy
 pandas
 huggingface_hub
 kagglehub
+joblib

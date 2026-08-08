@@ -13,3 +13,6 @@ __pycache__/
 
 # Colab temp files
 /content/
+
+# Trained fusion classifier (binary artifact, same treatment as saved_models/)
+/models/

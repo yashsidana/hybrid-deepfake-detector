@@ -11,7 +11,15 @@ data:
   image_size: 224
 datasets:
   celebdf: true
-  dfdc: true
+  dfd: true
+  # dfdc: blocked -- this specific Kaggle COMPETITION has late submissions
+  # permanently disabled by the host ("inability to replicate the unique
+  # design of this competition"), so the accept-rules step no new account
+  # can complete, which kagglehub.competition_download() depends on. Not a
+  # bug here -- confirmed by testing the click directly on kaggle.com.
+  # Use dfd (Google/Jigsaw's DFD, a plain public Kaggle Dataset with no
+  # such gate) as the second dataset instead.
+  dfdc: false
   faceforensics: false
   fakeavceleb: false
   genvidbench: false

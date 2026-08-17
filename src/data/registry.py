@@ -6,6 +6,7 @@ else in the codebase needs to change.
 
 from src.data.adapters.celebdf import CelebDFAdapter
 from src.data.adapters.custom import CustomAdapter
+from src.data.adapters.dfd import DFDAdapter
 from src.data.adapters.dfdc import DFDCAdapter
 from src.data.adapters.faceforensics import FaceForensicsAdapter
 from src.data.adapters.fakeavceleb import FakeAVCelebAdapter
@@ -13,6 +14,7 @@ from src.data.adapters.genvidbench import GenVidBenchAdapter
 
 ADAPTER_REGISTRY = {
     "celebdf": CelebDFAdapter,
+    "dfd": DFDAdapter,
     "dfdc": DFDCAdapter,
     "faceforensics": FaceForensicsAdapter,
     "fakeavceleb": FakeAVCelebAdapter,

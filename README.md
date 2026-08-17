@@ -381,7 +381,7 @@ Fake
 
 # Temporal Feature Extraction
 
-Current architecture: **CNN (ResNet-18, frozen) + LSTM**
+Current architecture: **CNN (ResNet-18, fine-tuned) + LSTM**
 
 Chosen over Optical Flow+CNN, ConvLSTM, 3D CNN, and Video Transformer as the best accuracy/compute/deployment trade-off for a Colab-compatible, capstone-scale project — see `src/features/temporal_extractor.py` for the full architecture rationale in code comments.
 
@@ -391,7 +391,7 @@ Architecture
 16-Frame Face Sequence
         │
         ▼
-ResNet-18 (per frame, frozen)
+ResNet-18 (per frame, fine-tuned)
         │
         ▼
 Per-Frame Feature Sequence [16, 512]

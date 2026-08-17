@@ -15,10 +15,10 @@ from src.preprocessing.temporal_dataset import get_dataloaders
 CHECKPOINT_PATH = "saved_models/temporal_checkpoint.pth"
 LOG_PATH = "saved_models/train_temporal.log"
 
-EPOCHS = 20
+EPOCHS = 10  # prototype spec: max 10 epochs
 EARLY_STOP_PATIENCE = 5
 LR = 1e-3
-BATCH_SIZE = 8
+BATCH_SIZE = 16  # prototype spec: batch 16
 
 # Must exist before logging.FileHandler(LOG_PATH) below runs at import time.
 os.makedirs("saved_models", exist_ok=True)
@@ -103,7 +103,16 @@ def main():
 
     model = TemporalClassifier().to(device)
     criterion = nn.CrossEntropyLoss(weight=class_weights)
-    optimizer = optim.Adam(model.parameters(), lr=LR)
+
+    # Differential learning rates: cnn_backbone is ImageNet-pretrained and
+    # now fine-tuned (not frozen -- see TemporalClassifier's docstring), so
+    # it gets a lower LR than the randomly-initialized LSTM/classifier head.
+    # Same rationale as train_semantic.py's optimizer setup.
+    head_params = list(model.lstm.parameters()) + list(model.classifier_head.parameters())
+    optimizer = optim.Adam([
+        {"params": model.cnn_backbone.parameters(), "lr": LR * 0.1},
+        {"params": head_params, "lr": LR},
+    ])
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="max", factor=0.5, patience=2
     )

@@ -19,6 +19,13 @@ class SemanticClassifier(nn.Module):
     models.semantic.features_dim, which Phase 3's fusion config already
     assumes. Changing this from the previous hidden size of 512 means the
     model must be retrained from this point forward.
+
+    The backbone is ImageNet-pretrained but NOT frozen -- it is fine-tuned
+    jointly with the embedding/classifier heads. See train_semantic.py's
+    optimizer setup: the backbone uses a lower learning rate than the heads
+    (standard fine-tuning practice) so a few epochs on a comparatively small
+    dataset don't wash out the pretrained low/mid-level features before the
+    heads have learned to use them.
     """
 
     def __init__(self, num_classes=2, embedding_dim=256):
@@ -27,11 +34,6 @@ class SemanticClassifier(nn.Module):
         self.backbone = models.efficientnet_b0(
             weights=models.EfficientNet_B0_Weights.DEFAULT
         )
-
-        # Freeze the convolutional backbone — only the embedding/classifier
-        # heads below are trained. Unchanged from before.
-        for param in self.backbone.features.parameters():
-            param.requires_grad = False
 
         in_features = self.backbone.classifier[1].in_features
 

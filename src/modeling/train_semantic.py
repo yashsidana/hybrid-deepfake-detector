@@ -88,16 +88,28 @@ def main():
     # Train + validation only — the test set is intentionally not loaded
     # here. Model selection must never see it. See test_semantic.py for the
     # one-time final evaluation.
-    train_loader, val_loader, _ = get_dataloaders(batch_size=16)
+    train_loader, val_loader, _ = get_dataloaders(batch_size=32)  # prototype spec: batch 32
 
     class_weights = compute_class_weights(train_loader.dataset, device=device)
 
     model = SemanticClassifier().to(device)
     criterion = nn.CrossEntropyLoss(weight=class_weights)
-    optimizer = optim.Adam(model.parameters(), lr=1e-4)
+
+    # Differential learning rates: the backbone is ImageNet-pretrained and
+    # now fine-tuned (not frozen -- see SemanticClassifier's docstring), so
+    # it gets a lower LR than the randomly-initialized embedding/classifier
+    # heads. Without this, a handful of epochs at the head's LR (1e-4) on a
+    # comparatively small dataset risks washing out the pretrained features
+    # before the heads have learned to use them -- standard fine-tuning
+    # practice, not a change to the architecture itself.
+    head_params = list(model.embedding_head.parameters()) + list(model.classifier_head.parameters())
+    optimizer = optim.Adam([
+        {"params": model.backbone.parameters(), "lr": 1e-5},
+        {"params": head_params, "lr": 1e-4},
+    ])
     scaler = GradScaler()
 
-    epochs = 5
+    epochs = 10  # prototype spec: max 10 epochs
     best_val_macro_f1 = -1.0  # ensures epoch 1 always saves a checkpoint, even in a degenerate all-zero-F1 edge case
 
     for epoch in range(epochs):

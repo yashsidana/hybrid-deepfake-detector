@@ -221,15 +221,28 @@ def extract_split(split_name, semantic_model, temporal_model, device,
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--splits-root", default=SPLITS_ROOT,
+                         help="Directory with train.csv/val.csv/test.csv "
+                              "(default: mixed-domain splits from create_splits.py; "
+                              "point this at a cross-dataset splits dir for that experiment).")
+    parser.add_argument("--output-root", default=OUTPUT_ROOT,
+                         help="Where to write train.npz/val.npz/test.npz "
+                              "(default: data/processed/fusion; use a distinct "
+                              "directory per experiment so runs don't overwrite each other).")
+    args = parser.parse_args()
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     semantic_model = _load_semantic_model(device)
     temporal_model = _load_temporal_model(device)
 
-    os.makedirs(OUTPUT_ROOT, exist_ok=True)
+    os.makedirs(args.output_root, exist_ok=True)
 
     for split_name in ("train", "val", "test"):
-        result = extract_split(split_name, semantic_model, temporal_model, device)
-        out_path = os.path.join(OUTPUT_ROOT, f"{split_name}.npz")
+        result = extract_split(split_name, semantic_model, temporal_model, device,
+                                splits_root=args.splits_root)
+        out_path = os.path.join(args.output_root, f"{split_name}.npz")
         np.savez(
             out_path,
             semantic_embeddings=result["semantic_embeddings"],

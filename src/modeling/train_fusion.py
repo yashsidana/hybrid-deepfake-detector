@@ -45,8 +45,8 @@ def _load_config():
         return yaml.safe_load(f)
 
 
-def _load_split(split_name):
-    path = os.path.join(EMBEDDINGS_ROOT, f"{split_name}.npz")
+def _load_split(split_name, embeddings_root=EMBEDDINGS_ROOT):
+    path = os.path.join(embeddings_root, f"{split_name}.npz")
     if not os.path.exists(path):
         raise FileNotFoundError(
             f"{path} not found. Run `python -m src.modeling.extract_embeddings` first."
@@ -86,14 +86,24 @@ def _fuse(semantic_emb, temporal_emb, forensic_emb, matcher,
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--embeddings-root", default=EMBEDDINGS_ROOT,
+                         help="Directory with train.npz/val.npz from extract_embeddings.py "
+                              "(default: data/processed/fusion; use a distinct directory "
+                              "per experiment, matching that run's --output-root).")
+    parser.add_argument("--model-path", default=MODEL_PATH)
+    parser.add_argument("--report-path", default=REPORT_PATH)
+    args = parser.parse_args()
+
     config = _load_config()
     fusion_cfg = config.get("models", {}).get("fusion", {})
     semantic_weight = fusion_cfg.get("semantic_weight", 1.0)
     temporal_weight = fusion_cfg.get("temporal_weight", 1.0)
     forensic_weight = fusion_cfg.get("forensic_weight", 1.0)
 
-    train_sem, train_temp, train_forensic, train_labels = _load_split("train")
-    val_sem, val_temp, val_forensic, val_labels = _load_split("val")
+    train_sem, train_temp, train_forensic, train_labels = _load_split("train", embeddings_root=args.embeddings_root)
+    val_sem, val_temp, val_forensic, val_labels = _load_split("val", embeddings_root=args.embeddings_root)
 
     if train_forensic is None:
         print(
@@ -162,7 +172,7 @@ def main():
     print(f"Best params: {search.best_params_}")
     print(f"Val Macro-F1: {val_macro_f1:.4f}")
 
-    os.makedirs(MODEL_DIR, exist_ok=True)
+    os.makedirs(os.path.dirname(args.model_path) or ".", exist_ok=True)
     joblib.dump({
         "svm": best_svm,
         "scaler": scaler,
@@ -173,10 +183,10 @@ def main():
         "uses_forensic": train_forensic is not None,
         "best_params": search.best_params_,
         "val_macro_f1": val_macro_f1,
-    }, MODEL_PATH)
+    }, args.model_path)
 
-    os.makedirs(os.path.dirname(REPORT_PATH), exist_ok=True)
-    with open(REPORT_PATH, "w") as f:
+    os.makedirs(os.path.dirname(args.report_path) or ".", exist_ok=True)
+    with open(args.report_path, "w") as f:
         json.dump({
             "best_params": search.best_params_,
             "val_macro_f1": val_macro_f1,
@@ -184,7 +194,7 @@ def main():
             "val_samples": int(len(val_labels)),
         }, f, indent=2)
 
-    print(f"Fusion model saved to {MODEL_PATH}")
+    print(f"Fusion model saved to {args.model_path}")
     print("Run `python -m src.modeling.test_fusion` for the final test-set evaluation.")
 
 

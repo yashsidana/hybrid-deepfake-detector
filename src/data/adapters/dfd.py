@@ -53,8 +53,21 @@ class DFDAdapter(BaseDatasetAdapter):
 
     KAGGLE_HANDLE = "sanikatiwarekar/deep-fake-detection-dfd-entire-original-dataset"
 
-    def download(self):
-        path = kagglehub.dataset_download(self.KAGGLE_HANDLE)
+    def download(self, max_retries=10, retry_delay=5):
+        import time
+        path = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                print(f"[DFDAdapter] Downloading / verifying dataset (attempt {attempt}/{max_retries})...")
+                path = kagglehub.dataset_download(self.KAGGLE_HANDLE)
+                break
+            except Exception as e:
+                print(f"[DFDAdapter] Download interrupted: {e}")
+                if attempt < max_retries:
+                    print(f"[DFDAdapter] Retrying in {retry_delay}s (will resume from cached byte offset)...")
+                    time.sleep(retry_delay)
+                else:
+                    raise
 
         os.makedirs(self.dataset_root, exist_ok=True)
 

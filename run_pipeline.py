@@ -98,8 +98,9 @@ def check_kaggle_creds():
 
 def stage_download():
     print_header("Stage 1: Dataset Download (Celeb-DF v2 + DFD)")
-    if not check_kaggle_creds():
-        raise FileNotFoundError("Kaggle credentials missing. See prompt above.")
+    has_creds = check_kaggle_creds()
+    if not has_creds:
+        print("Note: kaggle.json not found, attempting public dataset download via kagglehub...")
     
     from src.data.adapters.celebdf import CelebDFAdapter
     from src.data.adapters.dfd import DFDAdapter

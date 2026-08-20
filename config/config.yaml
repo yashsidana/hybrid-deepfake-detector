@@ -1,0 +1,68 @@
+# Dataset enable/disable flags:
+#   true                          -> enabled, uses adapter defaults
+#   false                         -> disabled (default for anything not listed)
+#   {enabled: true, hf_repo_id: ...} -> enabled, with adapter-specific extra config
+#                                       (currently only genvidbench uses this form)
+data:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  metadata_path: data/metadata/metadata.csv
+  splits_dir: data/splits
+  image_size: 224
+datasets:
+  celebdf: true
+  dfd: true
+  # dfdc: blocked -- this specific Kaggle COMPETITION has late submissions
+  # permanently disabled by the host ("inability to replicate the unique
+  # design of this competition"), so the accept-rules step no new account
+  # can complete, which kagglehub.competition_download() depends on. Not a
+  # bug here -- confirmed by testing the click directly on kaggle.com.
+  # Use dfd (Google/Jigsaw's DFD, a plain public Kaggle Dataset with no
+  # such gate) as the second dataset instead.
+  dfdc: false
+  faceforensics: false
+  fakeavceleb: false
+  genvidbench: false
+  custom: false
+preprocessing:
+  face_detection:
+    threshold: 0.9
+  temporal:
+    optical_flow_method: farneback
+    num_frames: 16
+  forensic:
+    # rPPG reads the raw video directly (not the cached temporal sequence)
+    # for a denser, short frame window -- see
+    # src/features/forensic_extractor.py's rppg_features() docstring.
+    rppg_window_seconds: 5.0
+    rppg_max_frames: 150
+models:
+  semantic:
+    weights_path: models/semantic/deepfake_model.pth
+    features_dim: 256
+  temporal:
+    weights_path: saved_models/temporal_checkpoint.pth
+    features_dim: 256
+    cnn_feature_dim: 512
+    num_frames: 16
+    lstm_hidden_size: 256
+    lstm_num_layers: 1
+  fusion:
+    classifier_type: svm
+    model_path: models/fusion_classifier/fusion_model.pkl
+    embeddings_dir: data/processed/fusion
+    # Static weighting for now (each branch embedding scaled by this factor
+    # before concatenation). Becomes per-sample/adaptive once
+    # forensic_extractor.py's compression detector lands -- see
+    # src/features/fusion.py's build_fused_vector() docstring.
+    semantic_weight: 1.0
+    temporal_weight: 1.0
+    forensic_weight: 1.0
+    svm:
+      kernel: rbf
+      C_grid: [0.1, 1, 10, 100]
+training:
+  batch_size: 16
+  learning_rate: 0.001
+  epochs: 5
+  device: cuda

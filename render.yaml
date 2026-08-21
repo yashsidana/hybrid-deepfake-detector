@@ -1,0 +1,26 @@
+# Render blueprint for this repo -- https://render.com/docs/blueprint-spec
+#
+# Deploy: on render.com, "New +" -> "Blueprint" -> select this repo. Render
+# reads this file and creates the service below with no manual field-
+# filling. Re-deploys automatically on every push to main.
+#
+# Free tier notes (see README's "Deploying" section for the full list):
+#   - Spins down after 15 min idle; first request after that takes
+#     ~30-60s to wake back up. Hit the URL a few minutes before a live
+#     demo so it's already warm.
+#   - 512MB RAM. torch + torchvision + facenet-pytorch + opencv fit, but
+#     it's not a lot of headroom -- if you see the service restart
+#     mid-request (an OOM kill), upgrade to the Starter plan.
+#   - Build installs torch from scratch each deploy, so the first build
+#     after a push can take several minutes. That's normal.
+services:
+  - type: web
+    name: hybrid-deepfake-detector
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn src.api.app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.13

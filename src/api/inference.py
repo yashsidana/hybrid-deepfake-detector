@@ -194,12 +194,26 @@ def predict_video(video_path):
     landmark_stability = float(np.mean(forensic_vector[47:59]))
     rppg_pulse_var = float(forensic_vector[59] if len(forensic_vector) > 59 else 0.0)
 
+    # Reasons list for UI breakdown
+    reasons = [
+        f"Semantic Spatial Model: {sem_prob_fake*100:.1f}% manipulation likelihood ({'Spatial artifacts detected' if sem_prob_fake >= 0.5 else 'Normal facial texture'}).",
+        f"Temporal Dynamic Model: {temp_prob_fake*100:.1f}% manipulation likelihood ({'Inter-frame motion anomaly' if temp_prob_fake >= 0.5 else 'Consistent temporal flow'}).",
+        f"Distribution-matching distance from authentic baseline: {distribution_score:.2f} ({'Statistical divergence detected' if distribution_score > 35 else 'Conforms to authentic distribution'}).",
+        f"Biological rPPG pulse variation: {rppg_pulse_var:.4f} with SRM noise residual energy of {srm_energy:.4f}.",
+    ]
+
     return {
         "prediction": prediction,
         "verdict": "Manipulated / Deepfake" if prediction == "fake" else "Authentic / Real",
         "confidence": round(confidence, 2),
         "fake_probability": round(fake_probability, 4),
         "real_probability": round(real_probability, 4),
+        "signals": {
+            "distribution_score": round(distribution_score, 2),
+            "landmark_motion_valid": landmark_stability > 0.01,
+            "rppg_valid": rppg_pulse_var > 0.001,
+        },
+        "reasons": reasons,
         "branch_scores": {
             "semantic_spatial": {
                 "score": round(sem_prob_fake, 4),

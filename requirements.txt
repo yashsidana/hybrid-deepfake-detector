@@ -1,5 +1,9 @@
 numpy
-opencv-python
+# headless build: no GUI/highgui deps (cv2.imshow etc. aren't used anywhere
+# in this codebase), which is what most hosted platforms (Render, HF
+# Spaces, plain Docker) need -- the regular opencv-python package fails to
+# import on those with "libGL.so.1: cannot open shared object file".
+opencv-python-headless
 torch
 torchvision
 facenet-pytorch

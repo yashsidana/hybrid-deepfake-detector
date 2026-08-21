@@ -508,6 +508,33 @@ This is deliberate: the backend is the heavy, still-changing part (GPU training,
 swaps), so the UI is built against the stable `/status` + `/predict` contract rather than against any
 particular model's internals.
 
+### Deploying (Render)
+
+This backend needs torch + torchvision + facenet-pytorch loaded into a long-lived process, and video
+inference can take more than a few seconds — that rules out Vercel-style serverless functions (strict
+size limits, no persistent process, short execution timeouts). `render.yaml` at the repo root deploys
+it as a normal persistent web service instead:
+
+1. Push to `main` (already done).
+2. On [render.com](https://render.com), **New +** → **Blueprint** → select this repo. Render reads
+   `render.yaml` and creates the service with the right build/start commands automatically.
+3. Wait for the build (installing torch from scratch takes several minutes the first time).
+4. Open the `.onrender.com` URL Render gives you — same `/status` + demo-mode behavior as local.
+
+Free-tier caveats worth knowing before a live demo:
+
+- **Cold start**: the free instance spins down after 15 minutes idle; the next request takes
+  ~30–60s to wake it back up. Load the URL a few minutes before presenting.
+- **512MB RAM**: enough for this pipeline's model sizes, but not a lot of headroom. If a request
+  makes the service restart mid-flight, that's an out-of-memory kill — upgrade to the Starter plan
+  ($7/mo, no code changes needed) if it happens.
+- **No GPU**: `/predict` will still run once real checkpoints exist, just on CPU (slower per
+  request than your training environment, fine for a demo's single-video-at-a-time use case).
+- Real checkpoints (`saved_models/*.pth`, `models/fusion_classifier/fusion_model.pkl`) aren't in
+  git (too large) and won't be on Render either until you add a step to fetch them (e.g. from
+  Drive/S3) during build or startup — until then, hosted `/status` reports the same "training in
+  progress" state as local, and demo mode covers the live-presentation flow.
+
 ---
 
 # Training Pipeline

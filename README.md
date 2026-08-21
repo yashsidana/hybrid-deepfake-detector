@@ -452,11 +452,13 @@ Branch weighting (`config.yaml`'s `models.fusion.semantic_weight` / `temporal_we
 # Web-Based Inference API
 
 `src/api/app.py` (FastAPI) + `src/api/inference.py` (pipeline orchestration) — proposal objective 5.
-Frontend lives separately in `src/api/frontend/` (`index.html` / `style.css` / `script.js`), served by
-FastAPI as static files — kept decoupled from the inference backend on purpose (see "Frontend/backend
-separation" below) so the heavy model side can keep changing without touching the UI.
+The frontend is a separate Vite + React app at `/frontend` (its own `package.json`, own dev server,
+own build step) — kept fully decoupled from the inference backend on purpose (see "Frontend/backend
+separation" below) so the heavy model side can keep changing without touching the UI, and vice versa.
 
 ### Run it locally
+
+Backend:
 
 ```bash
 pip install -r requirements.txt
@@ -464,12 +466,40 @@ python -m src.api.app
 # or: uvicorn src.api.app:app --reload
 ```
 
-Then open **http://localhost:8000**.
+Frontend — either serve the pre-built version (nothing to install, just uses what's already in
+`frontend/dist/`, already wired up by the backend below), or run it in dev mode for live-reloading
+while editing:
+
+```bash
+cd frontend
+npm install
+npm run dev          # dev server on :5173, proxies API calls to :8000
+```
+
+Then open **http://localhost:8000** (pre-built, served by FastAPI) or **http://localhost:5173** (live
+dev server, needs the backend also running on :8000 for API calls to resolve).
+
+Four pages: **Home** (`/`), **Analyze** (`/analyze` — the actual upload/status/result flow), **Architecture**
+(`/architecture` — the 8-stage pipeline + 3-branch breakdown, mirroring Figures 1–3 of the project report),
+and **Team** (`/team`).
+
+### Rebuilding the frontend after a change
+
+`frontend/dist/` is committed to git (Render's Python runtime has no Node, so it serves this pre-built
+output directly rather than building it at deploy time). After editing anything under `frontend/src/`:
+
+```bash
+cd frontend
+npm run build
+git add dist
+```
 
 ### Routes
 
-- `GET /` — the upload page (`src/api/frontend/index.html`)
-- `GET /static/...` — the page's CSS/JS
+- `GET /`, `/analyze`, `/architecture`, `/team` — the React app (client-side routed; FastAPI serves
+  `frontend/dist/index.html` for all of these plus any other unmatched path, so a hard refresh on any
+  page still works)
+- `GET /assets/...` — the built CSS/JS bundle
 - `GET /health` — liveness check (doesn't trigger model loading)
 - `GET /status` — reports which checkpoints exist yet, **without loading any of them**:
   ```json

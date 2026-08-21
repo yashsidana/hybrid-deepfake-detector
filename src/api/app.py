@@ -36,15 +36,20 @@ ALLOWED_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv"}
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
 
-_FRONTEND_DIR = Path(__file__).parent / "frontend"
+# The frontend is a separate Vite + React app (see /frontend at the repo
+# root) built to /frontend/dist -- this is NOT built automatically by
+# `pip install`, since Render's Python runtime has no Node. `dist/` is
+# committed to git for that reason (see frontend/README or the root
+# README's "Frontend" section): after any change under frontend/src, run
+# `npm run build` there and commit the updated dist/ alongside it.
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_DIST_DIR = _REPO_ROOT / "frontend" / "dist"
+_INDEX_HTML = _DIST_DIR / "index.html"
 
 app = FastAPI(title="Hybrid Deepfake Detector")
-app.mount("/static", StaticFiles(directory=_FRONTEND_DIR), name="static")
 
-
-@app.get("/")
-def index():
-    return FileResponse(_FRONTEND_DIR / "index.html")
+if (_DIST_DIR / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=_DIST_DIR / "assets"), name="assets")
 
 
 @app.get("/health")
@@ -178,6 +183,28 @@ async def predict_demo(file: UploadFile = File(...)):
         "real_probability": round(1 - fake_probability, 4),
         "demo": True,
     })
+
+
+@app.get("/{full_path:path}")
+def spa_fallback(full_path: str):
+    """
+    Serves the built React SPA's index.html for '/' and every client-side
+    route (/analyze, /architecture, /team, ...) so React Router owns the
+    URL and a hard refresh on any of those pages still works, instead of
+    404ing. MUST be the last route registered -- FastAPI matches routes
+    in registration order, so /health, /status, /predict, /predict/demo,
+    and /assets above all still take priority over this catch-all.
+    """
+    if not _INDEX_HTML.exists():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Frontend build not found at frontend/dist/index.html. "
+                "Run `npm install && npm run build` inside frontend/, or "
+                "pull the latest commit if dist/ is meant to be checked in."
+            ),
+        )
+    return FileResponse(_INDEX_HTML)
 
 
 if __name__ == "__main__":

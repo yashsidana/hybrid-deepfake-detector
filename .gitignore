@@ -16,3 +16,9 @@ __pycache__/
 
 # Trained fusion classifier (binary artifact, same treatment as saved_models/)
 /models/
+
+# Frontend (Vite + React) build tooling -- dist/ IS committed on purpose
+# (see frontend/README.md / root README's Frontend section): Render's
+# Python runtime has no Node, so app.py serves the pre-built dist/
+# directly rather than building it at deploy time.
+/frontend/node_modules/

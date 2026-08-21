@@ -199,52 +199,9 @@ async def predict(file: UploadFile = File(...)):
 @app.post("/predict/demo")
 async def predict_demo(file: UploadFile = File(...)):
     """
-    Simulated demo version of /predict for testing the interface.
+    Directly routes to the live multi-modal prediction pipeline.
     """
-    ext = os.path.splitext(file.filename or "")[1].lower()
-    if ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file type '{ext or '(none)'}'. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
-        )
-
-    size = 0
-    while chunk := await file.read(_UPLOAD_CHUNK_BYTES):
-        size += len(chunk)
-        if size > MAX_UPLOAD_BYTES:
-            raise HTTPException(
-                status_code=413,
-                detail=f"File too large (limit is {MAX_UPLOAD_BYTES // (1024 * 1024)}MB).",
-            )
-    if size == 0:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-
-    fake_probability = round(random.uniform(0.05, 0.95), 4)
-    dist_score = round(random.uniform(0.5, 4.0), 2)
-    landmark_valid = random.random() > 0.15
-    rppg_valid = random.random() > 0.25
-
-    reasons = [
-        f"[DEMO] Simulated distribution-matching distance: {dist_score:.2f}.",
-        f"[DEMO] Facial landmark motion signal: {'Tracked successfully.' if landmark_valid else 'Unreliable motion flow.'}",
-        f"[DEMO] Pulse (rPPG) biological signal: {'Plausible pulse rhythm.' if rppg_valid else 'No coherent pulse rhythm.'}",
-    ]
-
-    return JSONResponse({
-        "prediction": "fake" if fake_probability >= 0.5 else "real",
-        "verdict": "Manipulated / Deepfake" if fake_probability >= 0.5 else "Authentic / Real",
-        "confidence": round(max(fake_probability, 1 - fake_probability) * 100, 2),
-        "fake_probability": fake_probability,
-        "real_probability": round(1 - fake_probability, 4),
-        "signals": {
-            "distribution_score": dist_score,
-            "landmark_motion_valid": landmark_valid,
-            "rppg_valid": rppg_valid,
-        },
-        "reasons": reasons,
-        "demo": True,
-        "filename": file.filename,
-    })
+    return await predict_endpoint(file)
 
 
 @app.get("/{full_path:path}")

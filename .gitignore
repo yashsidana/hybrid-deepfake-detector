@@ -30,3 +30,4 @@ __pycache__/
 Thumbs.db
 .vscode/
 .idea/
+cloudflared.exe

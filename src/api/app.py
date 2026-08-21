@@ -1,10 +1,14 @@
 """
-Web-based inference interface and REST API for the Multi-Modal Deepfake Detection System.
+Web-based inference interface (proposal objective 5): upload a video, run
+it through the full hybrid pipeline, get back a real/fake probability
+score.
 
-Supports:
-- Built-in Full-Stack React SPA (frontend/dist/)
-- REST API with CORS for external deployed frontends (Vercel, Netlify, Render, etc.)
-- Endpoints: /health, /status, /metrics, /api/model-info, /predict, /predict/demo
+Run with:   python -m src.api.app
+or:         uvicorn src.api.app:app --reload
+
+Requires fastapi, uvicorn, and python-multipart (needed by FastAPI/
+Starlette to parse multipart file uploads) -- all added to
+requirements.txt alongside this change.
 """
 
 import json
@@ -13,13 +17,12 @@ import random
 import tempfile
 from pathlib import Path
 
-import torch
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.api.inference import (
+    EVAL_REPORT_PATH,
     FUSION_MODEL_PATH,
     SEMANTIC_CHECKPOINT,
     TEMPORAL_CHECKPOINT,
@@ -27,22 +30,28 @@ from src.api.inference import (
     predict_video,
 )
 
-EVAL_REPORT_PATH = "saved_models/test_fusion_evaluation_report.json"
-ALLOWED_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
+ALLOWED_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv"}
+# 200MB: generous for a short clip (the pipeline only ever looks at ~16
+# sampled frames plus a 5s rPPG window regardless of total length), while
+# still catching an accidental full-length-movie upload before it ties up
+# a request for minutes.
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
 
-_DIST_DIR = Path("frontend/dist")
-_ASSETS_DIR = _DIST_DIR / "assets"
+# The frontend is a separate Vite + React app (see /frontend at the repo
+# root) built to /frontend/dist -- this is NOT built automatically by
+# `pip install`, since Render's Python runtime has no Node. `dist/` is
+# committed to git for that reason (see frontend/README or the root
+# README's "Frontend" section): after any change under frontend/src, run
+# `npm run build` there and commit the updated dist/ alongside it.
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_DIST_DIR = _REPO_ROOT / "frontend" / "dist"
 _INDEX_HTML = _DIST_DIR / "index.html"
 
-app = FastAPI(
-    title="Hybrid Deepfake Detector API",
-    description="Multi-Modal Spatial-Temporal-Forensic Deepfake Detection Platform",
-    version="2.0.0",
-)
+from fastapi.middleware.cors import CORSMiddleware
 
-# Enable CORS for universal integration with any external deployed frontend
+app = FastAPI(title="Hybrid Deepfake Detector")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -51,31 +60,33 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount Vite built assets if available
-if _ASSETS_DIR.exists():
-    app.mount("/assets", StaticFiles(directory=_ASSETS_DIR), name="assets")
+if (_DIST_DIR / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=_DIST_DIR / "assets"), name="assets")
 
 
 @app.get("/health")
 def health():
     """
-    Health check endpoint returning system & GPU status.
+    Cheap liveness check that does NOT trigger model loading (unlike
+    /predict) -- useful for confirming the server itself is up before
+    worrying about whether checkpoints exist yet.
     """
-    gpu_available = torch.cuda.is_available()
-    gpu_name = torch.cuda.get_device_name(0) if gpu_available else "CPU Mode"
-    return {
-        "status": "online",
-        "gpu_acceleration": gpu_available,
-        "device": gpu_name,
-        "api_version": "2.0.0",
-    }
+    return {"status": "ok"}
 
 
 @app.get("/status")
 def status():
     """
-    Reports which pipeline stages have a checkpoint on disk.
-    Used by the React frontend PipelineStatus component.
+    Reports which pipeline stages have a checkpoint on disk, WITHOUT
+    loading any of them into memory (that only happens lazily, once, on
+    the first real /predict call -- see inference._PipelineBundle).
+
+    This is what the frontend polls on page load to decide whether to
+    show live-model predictions or fall back to /predict/demo. Once the
+    real semantic/temporal/fusion files are dropped into place (no code
+    change needed -- see inference.py's SEMANTIC_CHECKPOINT etc.), this
+    endpoint flips to ready=true on its own and the frontend hides the
+    demo-mode toggle automatically.
     """
     stages = {
         "semantic": os.path.exists(SEMANTIC_CHECKPOINT),
@@ -86,8 +97,10 @@ def status():
     missing = [name for name, present in stages.items() if not present]
     message = (
         None if ready else
-        f"Waiting on: {', '.join(missing)}. Training is in progress; "
-        "checkpoints referenced in src/api/inference.py will activate automatically."
+        "Waiting on: " + ", ".join(missing) + ". Training is in progress; "
+        "this panel will flip to ready automatically once the checkpoints "
+        "referenced in src/api/inference.py exist on disk -- no code or "
+        "frontend changes needed."
     )
     return {"ready": ready, "stages": stages, "message": message}
 
@@ -95,63 +108,33 @@ def status():
 @app.get("/metrics")
 def metrics():
     """
-    Reports the fused hybrid classifier's held-out test-set evaluation.
-    Used by the React frontend MetricsPanel component.
+    Reports the fused hybrid classifier's held-out test-set evaluation
+    (accuracy, precision, recall, F1, macro-F1, balanced accuracy, ROC-AUC,
+    confusion matrix) once src/modeling/test_fusion.py has actually been
+    run to completion -- this is the real, one-time, never-touched-again
+    test evaluation described in the project report, not something
+    recomputed per request.
+
+    Returns {"ready": false, ...} rather than fabricated numbers if that
+    hasn't happened yet, same honesty pattern as /status.
     """
     if not os.path.exists(EVAL_REPORT_PATH):
         return {
             "ready": False,
             "report": None,
-            "message": "No evaluation report yet. Pending test evaluation.",
+            "message": (
+                "No evaluation report yet -- this is written once by "
+                "test_fusion.py after the fused classifier is trained and "
+                "run against the held-out test set. Pending GPU training."
+            ),
         }
     with open(EVAL_REPORT_PATH) as f:
         report = json.load(f)
     return {"ready": True, "report": report, "message": None}
 
 
-@app.get("/api/model-info")
-def model_info():
-    """
-    Returns benchmark performance and architecture summary.
-    """
-    return {
-        "model_name": "Multi-Modal Spatial-Temporal-Forensic Hybrid Detector",
-        "benchmark_metrics": {
-            "test_roc_auc": 0.9838,
-            "test_balanced_accuracy": 0.9166,
-            "fake_precision": 0.9962,
-            "overall_accuracy": 0.8968,
-        },
-        "modalities": [
-            {
-                "name": "Semantic Spatial Branch",
-                "architecture": "EfficientNet-B0 + Deep Embedding Head (256-D)",
-                "focus": "Facial artifacts, boundary blending, texture inconsistencies",
-            },
-            {
-                "name": "Temporal Dynamic Branch",
-                "architecture": "ResNet-18 Feature Extractor + 2-Layer Bi-LSTM (256-D)",
-                "focus": "Inter-frame jitter, blinking patterns, motion flow",
-            },
-            {
-                "name": "Handcrafted Forensic Branch",
-                "features": "SRM Noise Residuals (24-D), Texture Statistics (23-D), Landmark Stability (12-D), rPPG Biological Pulse (4-D)",
-                "focus": "Biological realism and sensor noise residual",
-            },
-            {
-                "name": "Distribution Matching & Hybrid Fusion",
-                "architecture": "Ledoit-Wolf Mahalanobis Distance + Calibrated RBF-SVM (576-D)",
-                "focus": "Global multi-modal fusion & anomaly scoring",
-            }
-        ]
-    }
-
-
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
-    """
-    Analyzes an uploaded video file and returns a comprehensive real vs fake diagnosis.
-    """
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
@@ -181,50 +164,80 @@ async def predict(file: UploadFile = File(...)):
 
         try:
             result = predict_video(tmp_path)
-            result["filename"] = file.filename
         except ModelNotReadyError as e:
             raise HTTPException(status_code=503, detail=str(e))
         except Exception as e:
+            # Anything else (unreadable video, no face detected in any
+            # sampled frame, etc.) -- surfaced as a 500 with the actual
+            # reason rather than a bare traceback, but still a distinct
+            # path from ModelNotReadyError's 503 so the frontend/caller
+            # can tell "server isn't set up yet" apart from "this
+            # particular video failed."
             raise HTTPException(status_code=500, detail=f"Inference failed: {e}")
 
         return JSONResponse(result)
     finally:
         if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+            os.unlink(tmp_path)
 
 
 @app.post("/predict/demo")
 async def predict_demo(file: UploadFile = File(...)):
     """
-    Fast simulated demo version of /predict for interactive presentations.
+    Simulated version of /predict for presenting the interface before the
+    real fusion checkpoint exists. Validates the upload the same way
+    /predict does (so the demo faithfully represents the real request
+    flow) but returns a randomized, clearly-flagged ("demo": true) result
+    instead of running the actual model.
+
+    Intentionally NOT a fallback that /predict calls automatically -- the
+    frontend decides whether to hit this or the real endpoint (see
+    script.js), so a live deployment can never silently serve a simulated
+    result as if it were real.
     """
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported file type '{ext or '(none)'}'. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
+            detail=(
+                f"Unsupported file type '{ext or '(none)'}'. "
+                f"Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
+            ),
         )
 
-    # Simulated realistic probabilistic outputs
-    fake_probability = round(random.uniform(0.08, 0.94), 4)
-    is_fake = fake_probability >= 0.5
-    dist_score = round(random.uniform(2.4, 5.8) if is_fake else random.uniform(0.6, 1.8), 2)
-    landmark_valid = not is_fake or random.random() > 0.4
-    rppg_valid = not is_fake or random.random() > 0.6
+    size = 0
+    while chunk := await file.read(_UPLOAD_CHUNK_BYTES):
+        size += len(chunk)
+        if size > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large (limit is {MAX_UPLOAD_BYTES // (1024 * 1024)}MB).",
+            )
+    if size == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    fake_probability = round(random.uniform(0.05, 0.95), 4)
+    dist_score = round(random.uniform(0.5, 4.0), 2)
+    landmark_valid = random.random() > 0.15
+    rppg_valid = random.random() > 0.25
 
     reasons = [
-        f"[DEMO] Simulated distribution-matching distance: {dist_score:.2f}.",
-        f"[DEMO] Facial landmark motion signal: {'Tracked successfully with stable velocity.' if landmark_valid else 'Significant inter-frame trajectory jitter detected.'}",
-        f"[DEMO] Pulse (rPPG) biological signal: {'Plausible blood volume pulse rhythm.' if rppg_valid else 'Irregular/absent pulse rhythm in facial region.'}",
+        f"[DEMO] Simulated distribution-matching distance from typical "
+        f"real-media patterns: {dist_score:.2f} (higher = more statistically "
+        f"unusual). Not a real measurement -- the fusion classifier isn't "
+        f"wired in yet.",
+        "[DEMO] Simulated facial landmark motion signal: "
+        + ("tracked successfully across sampled frames."
+           if landmark_valid else
+           "unreliable for this video, so down-weighted rather than dropped."),
+        "[DEMO] Simulated pulse (rPPG) signal: "
+        + ("a plausible pulse was detected in the sampled window."
+           if rppg_valid else
+           "no reliable pulse was detected in the sampled window."),
     ]
 
     return JSONResponse({
-        "prediction": "fake" if is_fake else "real",
-        "verdict": "Manipulated / Deepfake" if is_fake else "Authentic / Real",
-        "confidence": round(max(fake_probability, 1 - fake_probability) * 100, 2),
+        "prediction": "fake" if fake_probability >= 0.5 else "real",
         "fake_probability": fake_probability,
         "real_probability": round(1 - fake_probability, 4),
         "signals": {
@@ -232,27 +245,33 @@ async def predict_demo(file: UploadFile = File(...)):
             "landmark_motion_valid": landmark_valid,
             "rppg_valid": rppg_valid,
         },
-        "branch_scores": {
-            "semantic_spatial": {"score": round(fake_probability * 0.95, 3), "label": "Spatial Artifacts"},
-            "temporal_consistency": {"score": round(fake_probability * 0.91, 3), "label": "Temporal Inconsistency"},
-            "distribution_distance": {"mahalanobis_distance": dist_score, "status": "Evaluated"},
-        },
         "reasons": reasons,
         "demo": True,
-        "filename": file.filename,
     })
 
 
 @app.get("/{full_path:path}")
 def spa_fallback(full_path: str):
     """
-    Serves the built React SPA's index.html for all frontend routes (/analyze, /architecture, /team, etc.)
+    Serves the built React SPA's index.html for '/' and every client-side
+    route (/analyze, /architecture, /team, ...) so React Router owns the
+    URL and a hard refresh on any of those pages still works, instead of
+    404ing. MUST be the last route registered -- FastAPI matches routes
+    in registration order, so /health, /status, /predict, /predict/demo,
+    and /assets above all still take priority over this catch-all.
     """
-    if _INDEX_HTML.exists():
-        return FileResponse(_INDEX_HTML)
-    return HTMLResponse("<h1>Hybrid Deepfake Detector API is running</h1><p>Visit <a href='/docs'>/docs</a> for API documentation.</p>")
+    if not _INDEX_HTML.exists():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Frontend build not found at frontend/dist/index.html. "
+                "Run `npm install && npm run build` inside frontend/, or "
+                "pull the latest commit if dist/ is meant to be checked in."
+            ),
+        )
+    return FileResponse(_INDEX_HTML)
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("src.api.app:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

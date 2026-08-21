@@ -43,6 +43,15 @@ export default function ResultCard({ result }) {
             <ProbBar label="Fake" value={result.fake_probability} color="var(--fake)" />
           </div>
 
+          {result.demo && (
+            <span
+              className="pill"
+              style={{ marginTop: 16, color: 'var(--pending)', borderColor: 'var(--pending)' }}
+            >
+              Simulated result — demo mode
+            </span>
+          )}
+
           {Array.isArray(result.reasons) && result.reasons.length > 0 && (
             <div style={{ marginTop: 20 }}>
               <div style={{ fontSize: '0.85rem', color: 'var(--text-dim)', marginBottom: 8 }}>

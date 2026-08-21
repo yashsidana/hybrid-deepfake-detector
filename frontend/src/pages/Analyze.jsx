@@ -19,13 +19,16 @@ export default function Analyze() {
 
   useEffect(() => {
     getStatus()
-      .then((s) => setStatus(s))
-      .catch(() => setStatus({ ready: true, stages: { semantic: true, temporal: true, fusion: true }, message: null }))
+      .then((s) => {
+        setStatus(s);
+        setUseDemo(!s.ready);
+      })
+      .catch(() => setStatus({ ready: false, stages: {}, message: 'Could not reach the backend /status endpoint.' }))
       .finally(() => setStatusLoading(false));
 
     getMetrics()
       .then(setMetrics)
-      .catch(() => setMetrics({ ready: true, report: null, message: null }))
+      .catch(() => setMetrics({ ready: false, report: null, message: 'Could not reach the backend /metrics endpoint.' }))
       .finally(() => setMetricsLoading(false));
   }, []);
 
@@ -41,7 +44,8 @@ export default function Analyze() {
     setError(null);
     setResult(null);
     try {
-      const data = useDemo ? await predictDemo(file) : await predict(file);
+      const demoMode = useDemo || !status?.ready;
+      const data = demoMode ? await predictDemo(file) : await predict(file);
       setResult(data);
     } catch (err) {
       setError(err.message);
@@ -50,14 +54,16 @@ export default function Analyze() {
     }
   }
 
+  const ready = !!status?.ready;
+
   return (
     <div className="page" style={{ paddingTop: 56 }}>
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}>
         <div className="section-title">Analyze</div>
         <h1 style={{ margin: '0 0 8px', fontSize: '2rem' }}>Upload a video</h1>
         <p style={{ color: 'var(--text-dim)', margin: '0 0 32px', maxWidth: 560 }}>
-          Runs the full multi-modal pipeline: frame sampling → face detection → semantic + temporal + forensic
-          feature extraction → distribution matching → hybrid SVM classification.
+          Runs the full pipeline: frame sampling → face detection → semantic + temporal + forensic
+          feature extraction → fusion → distribution matching → SVM classification.
         </p>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.4fr) minmax(0, 1fr)', gap: 24 }}>
@@ -69,15 +75,17 @@ export default function Analyze() {
                 {busy ? 'Analyzing…' : 'Analyze video'}
               </button>
 
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.85rem', color: 'var(--text-dim)', cursor: 'pointer' }}>
-                <input type="checkbox" checked={useDemo} onChange={(e) => setUseDemo(e.target.checked)} />
-                Use demo mode (instant presentation result)
-              </label>
+              {!ready && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.85rem', color: 'var(--text-dim)' }}>
+                  <input type="checkbox" checked={useDemo} onChange={(e) => setUseDemo(e.target.checked)} />
+                  Use demo mode (simulated result)
+                </label>
+              )}
             </div>
 
             {busy && (
               <p style={{ marginTop: 14, color: 'var(--text-dim)', fontSize: '0.9rem' }}>
-                {useDemo ? 'Running instant simulated forensic evaluation…' : 'Analyzing video across spatial, temporal, and forensic branches…'}
+                {useDemo || !ready ? 'Running demo pipeline (simulated result)…' : 'Analyzing… this can take a little while on CPU.'}
               </p>
             )}
             {error && (

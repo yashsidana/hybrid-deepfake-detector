@@ -36,6 +36,15 @@ SEMANTIC_CHECKPOINT = "saved_models/semantic_checkpoint.pth"
 TEMPORAL_CHECKPOINT = "saved_models/temporal_checkpoint.pth"
 FUSION_MODEL_PATH = "models/fusion_classifier/fusion_model.pkl"
 
+# Written by src/modeling/test_fusion.py's final held-out test-set run
+# (accuracy, precision, recall, F1, macro-F1, balanced accuracy, ROC-AUC,
+# confusion matrix -- see that script's REPORT_PATH). Doesn't exist until
+# that script has actually been run to completion once training finishes;
+# app.py's GET /metrics reads this the same way GET /status reads the
+# checkpoint paths above -- reports "not ready yet" rather than fabricating
+# numbers if the file isn't there.
+EVAL_REPORT_PATH = "saved_models/test_fusion_evaluation_report.json"
+
 # Must match extract_embeddings.py's _semantic_transform exactly.
 _semantic_transform = transforms.Compose([
     transforms.Resize((224, 224)),
@@ -184,9 +193,43 @@ def predict_video(video_path):
 
     fake_probability = float(probs[1])
     real_probability = float(probs[0])
+    prediction = "fake" if fake_probability >= 0.5 else "real"
+
+    # forensic_vector's last 2 entries are the landmark/rPPG validity flags
+    # appended by extract_forensic_vector() -- see its docstring. Surfaced
+    # here (rather than a stronger causal claim about *why* the SVM
+    # decided what it did, which would need real interpretability work
+    # like SHAP) as honest transparency about what the pipeline actually
+    # looked at for this specific video.
+    landmark_valid = bool(forensic_vector[-2]) if uses_forensic else None
+    rppg_valid = bool(forensic_vector[-1]) if uses_forensic else None
+    dist_score = float(distribution_score[0])
+
+    reasons = [
+        f"Distribution-matching distance from typical real-media patterns: "
+        f"{dist_score:.2f} (higher = more statistically unusual)."
+    ]
+    if uses_forensic:
+        reasons.append(
+            "Facial landmark motion tracked successfully across the sampled frames."
+            if landmark_valid else
+            "Facial landmark tracking was unreliable for this video -- that signal "
+            "was down-weighted rather than dropping the video entirely."
+        )
+        reasons.append(
+            "A plausible pulse (rPPG) signal was detected in the sampled window."
+            if rppg_valid else
+            "No reliable pulse (rPPG) signal was detected in the sampled window."
+        )
 
     return {
-        "prediction": "fake" if fake_probability >= 0.5 else "real",
+        "prediction": prediction,
         "fake_probability": fake_probability,
         "real_probability": real_probability,
+        "signals": {
+            "distribution_score": dist_score,
+            "landmark_motion_valid": landmark_valid,
+            "rppg_valid": rppg_valid,
+        },
+        "reasons": reasons,
     }

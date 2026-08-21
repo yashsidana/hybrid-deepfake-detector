@@ -11,6 +11,7 @@ Starlette to parse multipart file uploads) -- all added to
 requirements.txt alongside this change.
 """
 
+import json
 import os
 import random
 import tempfile
@@ -21,6 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.api.inference import (
+    EVAL_REPORT_PATH,
     FUSION_MODEL_PATH,
     SEMANTIC_CHECKPOINT,
     TEMPORAL_CHECKPOINT,
@@ -91,6 +93,34 @@ def status():
         "frontend changes needed."
     )
     return {"ready": ready, "stages": stages, "message": message}
+
+
+@app.get("/metrics")
+def metrics():
+    """
+    Reports the fused hybrid classifier's held-out test-set evaluation
+    (accuracy, precision, recall, F1, macro-F1, balanced accuracy, ROC-AUC,
+    confusion matrix) once src/modeling/test_fusion.py has actually been
+    run to completion -- this is the real, one-time, never-touched-again
+    test evaluation described in the project report, not something
+    recomputed per request.
+
+    Returns {"ready": false, ...} rather than fabricated numbers if that
+    hasn't happened yet, same honesty pattern as /status.
+    """
+    if not os.path.exists(EVAL_REPORT_PATH):
+        return {
+            "ready": False,
+            "report": None,
+            "message": (
+                "No evaluation report yet -- this is written once by "
+                "test_fusion.py after the fused classifier is trained and "
+                "run against the held-out test set. Pending GPU training."
+            ),
+        }
+    with open(EVAL_REPORT_PATH) as f:
+        report = json.load(f)
+    return {"ready": True, "report": report, "message": None}
 
 
 @app.post("/predict")
@@ -177,10 +207,35 @@ async def predict_demo(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
     fake_probability = round(random.uniform(0.05, 0.95), 4)
+    dist_score = round(random.uniform(0.5, 4.0), 2)
+    landmark_valid = random.random() > 0.15
+    rppg_valid = random.random() > 0.25
+
+    reasons = [
+        f"[DEMO] Simulated distribution-matching distance from typical "
+        f"real-media patterns: {dist_score:.2f} (higher = more statistically "
+        f"unusual). Not a real measurement -- the fusion classifier isn't "
+        f"wired in yet.",
+        "[DEMO] Simulated facial landmark motion signal: "
+        + ("tracked successfully across sampled frames."
+           if landmark_valid else
+           "unreliable for this video, so down-weighted rather than dropped."),
+        "[DEMO] Simulated pulse (rPPG) signal: "
+        + ("a plausible pulse was detected in the sampled window."
+           if rppg_valid else
+           "no reliable pulse was detected in the sampled window."),
+    ]
+
     return JSONResponse({
         "prediction": "fake" if fake_probability >= 0.5 else "real",
         "fake_probability": fake_probability,
         "real_probability": round(1 - fake_probability, 4),
+        "signals": {
+            "distribution_score": dist_score,
+            "landmark_motion_valid": landmark_valid,
+            "rppg_valid": rppg_valid,
+        },
+        "reasons": reasons,
         "demo": True,
     })
 

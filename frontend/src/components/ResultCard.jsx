@@ -51,6 +51,27 @@ export default function ResultCard({ result }) {
               Simulated result — demo mode
             </span>
           )}
+
+          {Array.isArray(result.reasons) && result.reasons.length > 0 && (
+            <div style={{ marginTop: 20 }}>
+              <div style={{ fontSize: '0.85rem', color: 'var(--text-dim)', marginBottom: 8 }}>
+                Why this result
+              </div>
+              <ul style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {result.reasons.map((reason, i) => (
+                  <motion.li
+                    key={i}
+                    initial={{ opacity: 0, x: -6 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: 0.15 + i * 0.08 }}
+                    style={{ fontSize: '0.88rem', color: 'var(--text)', lineHeight: 1.5 }}
+                  >
+                    {reason}
+                  </motion.li>
+                ))}
+              </ul>
+            </div>
+          )}
         </motion.div>
       )}
     </AnimatePresence>

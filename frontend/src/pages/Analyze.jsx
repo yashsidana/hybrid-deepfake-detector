@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { getStatus, predict, predictDemo } from '../api.js';
+import { getStatus, getMetrics, predict, predictDemo } from '../api.js';
 import PipelineStatus from '../components/PipelineStatus.jsx';
+import MetricsPanel from '../components/MetricsPanel.jsx';
 import Dropzone from '../components/Dropzone.jsx';
 import ResultCard from '../components/ResultCard.jsx';
 
 export default function Analyze() {
   const [status, setStatus] = useState(null);
   const [statusLoading, setStatusLoading] = useState(true);
+  const [metrics, setMetrics] = useState(null);
+  const [metricsLoading, setMetricsLoading] = useState(true);
   const [file, setFile] = useState(null);
   const [useDemo, setUseDemo] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -22,6 +25,11 @@ export default function Analyze() {
       })
       .catch(() => setStatus({ ready: false, stages: {}, message: 'Could not reach the backend /status endpoint.' }))
       .finally(() => setStatusLoading(false));
+
+    getMetrics()
+      .then(setMetrics)
+      .catch(() => setMetrics({ ready: false, report: null, message: 'Could not reach the backend /metrics endpoint.' }))
+      .finally(() => setMetricsLoading(false));
   }, []);
 
   function onFile(f) {
@@ -87,7 +95,10 @@ export default function Analyze() {
             <ResultCard result={result} />
           </div>
 
-          <PipelineStatus status={status} loading={statusLoading} />
+          <div>
+            <PipelineStatus status={status} loading={statusLoading} />
+            <MetricsPanel metrics={metrics} loading={metricsLoading} />
+          </div>
         </div>
       </motion.div>
     </div>

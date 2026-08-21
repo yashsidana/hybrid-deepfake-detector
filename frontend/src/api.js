@@ -8,6 +8,12 @@ export async function getStatus() {
   return res.json();
 }
 
+export async function getMetrics() {
+  const res = await fetch('/metrics');
+  if (!res.ok) throw new Error(`metrics ${res.status}`);
+  return res.json();
+}
+
 async function postVideo(endpoint, file) {
   const formData = new FormData();
   formData.append('file', file);

@@ -507,19 +507,39 @@ git add dist
   ```
   The frontend polls this on page load to show a live pipeline-status panel and to decide whether to
   enable demo mode.
+- `GET /metrics` — reports the fused classifier's held-out test-set evaluation
+  (`saved_models/test_fusion_evaluation_report.json`, written once by `src/modeling/test_fusion.py`
+  after training):
+  ```json
+  { "ready": false, "report": null, "message": "No evaluation report yet -- ..." }
+  ```
+  Flips to `{"ready": true, "report": {"accuracy": ..., "precision": ..., "recall": ..., "f1_score": ...,
+  "macro_f1": ..., "balanced_accuracy": ..., "roc_auc": ..., "confusion_matrix": [[...]], ...}}` the
+  moment that file exists on disk — same "never fabricate numbers" pattern as `/status`. The frontend's
+  Analyze page renders this as a metrics panel next to the pipeline status.
 - `POST /predict` — accepts a video file (`.mp4`/`.avi`/`.mov`/`.mkv`, ≤200MB), runs it through face
   detection → semantic + temporal + forensic feature extraction → fusion classifier, returns:
   ```json
-  { "prediction": "fake", "fake_probability": 0.87, "real_probability": 0.13 }
+  {
+    "prediction": "fake",
+    "fake_probability": 0.87,
+    "real_probability": 0.13,
+    "signals": {"distribution_score": 3.1, "landmark_motion_valid": true, "rppg_valid": false},
+    "reasons": ["Distribution-matching distance from typical real-media patterns: 3.10 ...", "..."]
+  }
   ```
+  `signals`/`reasons` are plain-English explanations of what the pipeline actually observed for that
+  video (Mahalanobis distance from the fitted "genuine media" distribution, plus whether landmark motion
+  and rPPG pulse extraction succeeded) — not a causal explanation of the SVM's decision boundary itself.
   Requires `saved_models/semantic_checkpoint.pth`, `saved_models/temporal_checkpoint.pth`, and
   `models/fusion_classifier/fusion_model.pkl` to already exist (trained via the pipeline above) —
   returns a `503` with a clear message if any are missing, rather than a crash. Models are loaded once
   per process and reused across requests.
-- `POST /predict/demo` — same request/response shape as `/predict`, but returns a randomized result
-  with `"demo": true` instead of running the real pipeline. Used for presenting the interface before
-  the real checkpoints exist; never called automatically as a fallback by `/predict` itself, so a real
-  deployment can't silently serve a simulated number.
+- `POST /predict/demo` — same request/response shape as `/predict` (including simulated `signals`/
+  `reasons`, each prefixed `[DEMO]`), but randomized with `"demo": true` instead of running the real
+  pipeline. Used for presenting the interface before the real checkpoints exist; never called
+  automatically as a fallback by `/predict` itself, so a real deployment can't silently serve a
+  simulated number.
 
 ### Frontend/backend separation
 

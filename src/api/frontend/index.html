@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Hybrid Deepfake Detector</title>
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Hybrid Deepfake Detector</h1>
+      <p class="subtitle">Upload a video to check whether it's real or AI-generated / manipulated.</p>
+    </header>
+
+    <section class="pipeline-card" id="pipeline-card">
+      <div class="pipeline-header">
+        <h2>Pipeline status</h2>
+        <span class="badge" id="overall-badge">Checking&hellip;</span>
+      </div>
+      <ol class="stage-list" id="stage-list">
+        <li data-stage="semantic"><span class="dot"></span> Semantic branch (EfficientNet-B0)</li>
+        <li data-stage="temporal"><span class="dot"></span> Temporal branch (ResNet-18 + LSTM)</li>
+        <li data-stage="fusion"><span class="dot"></span> Fusion + distribution matching (SVM)</li>
+      </ol>
+      <p class="pipeline-note" id="pipeline-note"></p>
+    </section>
+
+    <section class="upload-card">
+      <div class="dropzone" id="dropzone">
+        <p id="dropzone-text">Drag a video here, or click to choose a file</p>
+        <p class="hint">.mp4, .avi, .mov, .mkv &middot; up to 200MB</p>
+        <input type="file" id="file-input" accept=".mp4,.avi,.mov,.mkv" />
+      </div>
+
+      <div class="actions">
+        <button id="submit-btn" disabled>Analyze video</button>
+        <label class="demo-toggle" id="demo-toggle-wrap" style="display:none;">
+          <input type="checkbox" id="demo-toggle" />
+          Use demo mode (simulated result)
+        </label>
+      </div>
+
+      <div id="status"></div>
+      <div id="result"></div>
+    </section>
+
+    <footer>
+      <p>Full architecture: dataset &rarr; semantic + temporal + forensic feature extraction &rarr; feature fusion &rarr; distribution matching &rarr; SVM classification &rarr; this interface.</p>
+    </footer>
+  </div>
+
+  <script src="/static/script.js"></script>
+</body>
+</html>

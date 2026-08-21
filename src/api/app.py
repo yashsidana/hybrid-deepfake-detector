@@ -12,12 +12,21 @@ requirements.txt alongside this change.
 """
 
 import os
+import random
 import tempfile
+from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
-from src.api.inference import ModelNotReadyError, predict_video
+from src.api.inference import (
+    FUSION_MODEL_PATH,
+    SEMANTIC_CHECKPOINT,
+    TEMPORAL_CHECKPOINT,
+    ModelNotReadyError,
+    predict_video,
+)
 
 ALLOWED_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv"}
 # 200MB: generous for a short clip (the pipeline only ever looks at ~16
@@ -27,12 +36,15 @@ ALLOWED_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv"}
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
 
+_FRONTEND_DIR = Path(__file__).parent / "frontend"
+
 app = FastAPI(title="Hybrid Deepfake Detector")
+app.mount("/static", StaticFiles(directory=_FRONTEND_DIR), name="static")
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/")
 def index():
-    return _INDEX_HTML
+    return FileResponse(_FRONTEND_DIR / "index.html")
 
 
 @app.get("/health")
@@ -43,6 +55,37 @@ def health():
     worrying about whether checkpoints exist yet.
     """
     return {"status": "ok"}
+
+
+@app.get("/status")
+def status():
+    """
+    Reports which pipeline stages have a checkpoint on disk, WITHOUT
+    loading any of them into memory (that only happens lazily, once, on
+    the first real /predict call -- see inference._PipelineBundle).
+
+    This is what the frontend polls on page load to decide whether to
+    show live-model predictions or fall back to /predict/demo. Once the
+    real semantic/temporal/fusion files are dropped into place (no code
+    change needed -- see inference.py's SEMANTIC_CHECKPOINT etc.), this
+    endpoint flips to ready=true on its own and the frontend hides the
+    demo-mode toggle automatically.
+    """
+    stages = {
+        "semantic": os.path.exists(SEMANTIC_CHECKPOINT),
+        "temporal": os.path.exists(TEMPORAL_CHECKPOINT),
+        "fusion": os.path.exists(FUSION_MODEL_PATH),
+    }
+    ready = all(stages.values())
+    missing = [name for name, present in stages.items() if not present]
+    message = (
+        None if ready else
+        "Waiting on: " + ", ".join(missing) + ". Training is in progress; "
+        "this panel will flip to ready automatically once the checkpoints "
+        "referenced in src/api/inference.py exist on disk -- no code or "
+        "frontend changes needed."
+    )
+    return {"ready": ready, "stages": stages, "message": message}
 
 
 @app.post("/predict")
@@ -93,126 +136,48 @@ async def predict(file: UploadFile = File(...)):
             os.unlink(tmp_path)
 
 
-_INDEX_HTML = """<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Hybrid Deepfake Detector</title>
-<style>
-  :root { color-scheme: light; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    max-width: 640px; margin: 60px auto; padding: 0 20px; color: #1a1a1a;
-  }
-  h1 { font-size: 1.5rem; margin-bottom: 4px; }
-  p.subtitle { color: #666; margin-top: 0; }
-  .dropzone {
-    border: 2px dashed #999; border-radius: 12px; padding: 40px;
-    text-align: center; cursor: pointer;
-    transition: border-color .15s, background .15s;
-  }
-  .dropzone.dragover { border-color: #4a90d9; background: #f0f7ff; }
-  .dropzone p { margin: 4px 0; }
-  .hint { font-size: 0.85rem; color: #888; }
-  #file-input { display: none; }
-  button {
-    margin-top: 16px; padding: 10px 22px; border: none; border-radius: 8px;
-    background: #1a1a1a; color: white; font-size: 1rem; cursor: pointer;
-  }
-  button:disabled { background: #aaa; cursor: not-allowed; }
-  #status { margin-top: 14px; color: #555; min-height: 1.2em; }
-  #result {
-    margin-top: 20px; padding: 20px; border-radius: 12px; display: none;
-  }
-  #result.real { background: #e6f7ec; border: 1px solid #34a853; }
-  #result.fake { background: #fdeaea; border: 1px solid #ea4335; }
-  #result .label { font-size: 1.2rem; font-weight: 600; }
-  #result .prob { color: #555; margin-top: 6px; font-size: 0.95rem; }
-</style>
-</head>
-<body>
-  <h1>Hybrid Deepfake Detector</h1>
-  <p class="subtitle">Upload a video to check whether it's real or AI-generated / manipulated.</p>
+@app.post("/predict/demo")
+async def predict_demo(file: UploadFile = File(...)):
+    """
+    Simulated version of /predict for presenting the interface before the
+    real fusion checkpoint exists. Validates the upload the same way
+    /predict does (so the demo faithfully represents the real request
+    flow) but returns a randomized, clearly-flagged ("demo": true) result
+    instead of running the actual model.
 
-  <div class="dropzone" id="dropzone">
-    <p id="dropzone-text">Drag a video here, or click to choose a file</p>
-    <p class="hint">.mp4, .avi, .mov, .mkv &middot; up to 200MB</p>
-    <input type="file" id="file-input" accept=".mp4,.avi,.mov,.mkv" />
-  </div>
+    Intentionally NOT a fallback that /predict calls automatically -- the
+    frontend decides whether to hit this or the real endpoint (see
+    script.js), so a live deployment can never silently serve a simulated
+    result as if it were real.
+    """
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported file type '{ext or '(none)'}'. "
+                f"Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
+            ),
+        )
 
-  <button id="submit-btn" disabled>Analyze video</button>
-  <div id="status"></div>
-  <div id="result"></div>
+    size = 0
+    while chunk := await file.read(_UPLOAD_CHUNK_BYTES):
+        size += len(chunk)
+        if size > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large (limit is {MAX_UPLOAD_BYTES // (1024 * 1024)}MB).",
+            )
+    if size == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
-<script>
-  const dropzone = document.getElementById('dropzone');
-  const dropzoneText = document.getElementById('dropzone-text');
-  const fileInput = document.getElementById('file-input');
-  const submitBtn = document.getElementById('submit-btn');
-  const statusEl = document.getElementById('status');
-  const resultEl = document.getElementById('result');
-  let selectedFile = null;
-
-  dropzone.addEventListener('click', () => fileInput.click());
-  dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('dragover'); });
-  dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
-  dropzone.addEventListener('drop', (e) => {
-    e.preventDefault();
-    dropzone.classList.remove('dragover');
-    if (e.dataTransfer.files.length) setFile(e.dataTransfer.files[0]);
-  });
-  fileInput.addEventListener('change', () => {
-    if (fileInput.files.length) setFile(fileInput.files[0]);
-  });
-
-  function setFile(file) {
-    selectedFile = file;
-    dropzoneText.textContent = `Selected: ${file.name}`;
-    submitBtn.disabled = false;
-    resultEl.style.display = 'none';
-    statusEl.textContent = '';
-  }
-
-  submitBtn.addEventListener('click', async () => {
-    if (!selectedFile) return;
-    submitBtn.disabled = true;
-    statusEl.textContent = 'Analyzing... this can take a little while on CPU.';
-    resultEl.style.display = 'none';
-
-    const formData = new FormData();
-    formData.append('file', selectedFile);
-
-    try {
-      const response = await fetch('/predict', { method: 'POST', body: formData });
-      const data = await response.json();
-
-      if (!response.ok) {
-        statusEl.textContent = `Error: ${data.detail || 'unknown error'}`;
-        submitBtn.disabled = false;
-        return;
-      }
-
-      statusEl.textContent = '';
-      resultEl.className = data.prediction;
-      resultEl.style.display = 'block';
-      const pFake = (data.fake_probability * 100).toFixed(1);
-      const pReal = (data.real_probability * 100).toFixed(1);
-      resultEl.innerHTML =
-        '<div class="label">' +
-        (data.prediction === 'fake' ? 'Likely AI-generated / manipulated' : 'Likely authentic') +
-        '</div>' +
-        '<div class="prob">P(fake) = ' + pFake + '% &middot; P(real) = ' + pReal + '%</div>';
-    } catch (err) {
-      statusEl.textContent = `Request failed: ${err}`;
-    } finally {
-      submitBtn.disabled = false;
-    }
-  });
-</script>
-</body>
-</html>
-"""
+    fake_probability = round(random.uniform(0.05, 0.95), 4)
+    return JSONResponse({
+        "prediction": "fake" if fake_probability >= 0.5 else "real",
+        "fake_probability": fake_probability,
+        "real_probability": round(1 - fake_probability, 4),
+        "demo": True,
+    })
 
 
 if __name__ == "__main__":

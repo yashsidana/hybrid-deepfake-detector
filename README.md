@@ -452,22 +452,61 @@ Branch weighting (`config.yaml`'s `models.fusion.semantic_weight` / `temporal_we
 # Web-Based Inference API
 
 `src/api/app.py` (FastAPI) + `src/api/inference.py` (pipeline orchestration) — proposal objective 5.
+Frontend lives separately in `src/api/frontend/` (`index.html` / `style.css` / `script.js`), served by
+FastAPI as static files — kept decoupled from the inference backend on purpose (see "Frontend/backend
+separation" below) so the heavy model side can keep changing without touching the UI.
 
-Run it:
+### Run it locally
 
 ```bash
+pip install -r requirements.txt
 python -m src.api.app
 # or: uvicorn src.api.app:app --reload
 ```
 
-- `GET /` — minimal drag-and-drop upload page
+Then open **http://localhost:8000**.
+
+### Routes
+
+- `GET /` — the upload page (`src/api/frontend/index.html`)
+- `GET /static/...` — the page's CSS/JS
 - `GET /health` — liveness check (doesn't trigger model loading)
-- `POST /predict` — accepts a video file (`.mp4`/`.avi`/`.mov`/`.mkv`, ≤200MB), runs it through face detection → semantic + temporal + forensic feature extraction → fusion classifier, returns:
+- `GET /status` — reports which checkpoints exist yet, **without loading any of them**:
+  ```json
+  { "ready": false, "stages": {"semantic": false, "temporal": false, "fusion": false}, "message": "..." }
+  ```
+  The frontend polls this on page load to show a live pipeline-status panel and to decide whether to
+  enable demo mode.
+- `POST /predict` — accepts a video file (`.mp4`/`.avi`/`.mov`/`.mkv`, ≤200MB), runs it through face
+  detection → semantic + temporal + forensic feature extraction → fusion classifier, returns:
   ```json
   { "prediction": "fake", "fake_probability": 0.87, "real_probability": 0.13 }
   ```
+  Requires `saved_models/semantic_checkpoint.pth`, `saved_models/temporal_checkpoint.pth`, and
+  `models/fusion_classifier/fusion_model.pkl` to already exist (trained via the pipeline above) —
+  returns a `503` with a clear message if any are missing, rather than a crash. Models are loaded once
+  per process and reused across requests.
+- `POST /predict/demo` — same request/response shape as `/predict`, but returns a randomized result
+  with `"demo": true` instead of running the real pipeline. Used for presenting the interface before
+  the real checkpoints exist; never called automatically as a fallback by `/predict` itself, so a real
+  deployment can't silently serve a simulated number.
 
-Requires `saved_models/semantic_checkpoint.pth`, `saved_models/temporal_checkpoint.pth`, and `models/fusion_classifier/fusion_model.pkl` to already exist (trained via the pipeline above) — returns a `503` with a clear message if any are missing, rather than a crash. Models are loaded once per process and reused across requests.
+### Frontend/backend separation
+
+The frontend never hard-codes whether the model is ready — it always calls `/status` first and adapts:
+
+- **Checkpoints missing** (current state, training in progress): pipeline panel shows which stage is
+  pending, the "demo mode" toggle is switched on automatically, and `/predict/demo` is used so the
+  panel/demo can walk through the full upload → analyze → result flow with a clearly labeled simulated
+  number.
+- **Checkpoints present** (once training finishes): `/status` flips to `ready: true` on its own, the
+  demo toggle disappears, and the exact same page starts calling the real `/predict` endpoint — **no
+  frontend code changes needed** when the trained fusion model is dropped into
+  `models/fusion_classifier/fusion_model.pkl` (and the two `saved_models/*.pth` files).
+
+This is deliberate: the backend is the heavy, still-changing part (GPU training, new branches, model
+swaps), so the UI is built against the stable `/status` + `/predict` contract rather than against any
+particular model's internals.
 
 ---
 
@@ -640,16 +679,20 @@ Prediction
 
 ---
 
-# Planned Web Application
+# Web Application Status
 
-The final system will allow users to:
+**Implemented** — see "Web-Based Inference API" above for the actual routes, run instructions, and
+the frontend/backend separation. The interface already:
 
-- Upload a video
-- Process uploaded frames
-- Detect manipulated facial regions
-- Predict whether the video is Real or Fake
-- Display confidence score
-- View inference results in real time
+- Accepts a video upload (drag-and-drop or file picker)
+- Runs it through the full pipeline (frames → face detection → semantic + temporal + forensic
+  extraction → fusion → distribution matching → SVM)
+- Predicts Real / Fake with a confidence score
+- Shows results in the browser immediately after the request completes
+
+What's still pending is not the interface itself, but the trained fusion checkpoint it calls into
+(blocked on GPU training time — see Current Progress below). Until then, `/status` reports this
+honestly and the frontend falls back to a clearly-labeled demo mode rather than a fabricated result.
 
 ---
 

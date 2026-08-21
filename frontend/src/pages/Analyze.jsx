@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { getStatus, getMetrics, predict } from '../api.js';
+import { getStatus, getMetrics, predict, predictDemo } from '../api.js';
 import PipelineStatus from '../components/PipelineStatus.jsx';
 import MetricsPanel from '../components/MetricsPanel.jsx';
 import Dropzone from '../components/Dropzone.jsx';
@@ -12,6 +12,7 @@ export default function Analyze() {
   const [metrics, setMetrics] = useState(null);
   const [metricsLoading, setMetricsLoading] = useState(true);
   const [file, setFile] = useState(null);
+  const [useDemo, setUseDemo] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
@@ -40,7 +41,7 @@ export default function Analyze() {
     setError(null);
     setResult(null);
     try {
-      const data = await predict(file);
+      const data = useDemo ? await predictDemo(file) : await predict(file);
       setResult(data);
     } catch (err) {
       setError(err.message);
@@ -65,13 +66,18 @@ export default function Analyze() {
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginTop: 20, flexWrap: 'wrap' }}>
               <button className="btn" disabled={!file || busy} onClick={onAnalyze}>
-                {busy ? 'Running Deepfake Analysis…' : 'Analyze Video Integrity'}
+                {busy ? 'Analyzing…' : 'Analyze video'}
               </button>
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.85rem', color: 'var(--text-dim)', cursor: 'pointer' }}>
+                <input type="checkbox" checked={useDemo} onChange={(e) => setUseDemo(e.target.checked)} />
+                Use demo mode (instant presentation result)
+              </label>
             </div>
 
             {busy && (
               <p style={{ marginTop: 14, color: 'var(--text-dim)', fontSize: '0.9rem' }}>
-                Analyzing video across spatial, temporal, and forensic branches…
+                {useDemo ? 'Running instant simulated forensic evaluation…' : 'Analyzing video across spatial, temporal, and forensic branches…'}
               </p>
             )}
             {error && (

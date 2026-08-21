@@ -199,9 +199,48 @@ async def predict(file: UploadFile = File(...)):
 @app.post("/predict/demo")
 async def predict_demo(file: UploadFile = File(...)):
     """
-    Directly routes to the live multi-modal prediction pipeline.
+    Fast simulated demo version of /predict for interactive presentations.
     """
-    return await predict_endpoint(file)
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type '{ext or '(none)'}'. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
+        )
+
+    # Simulated realistic probabilistic outputs
+    fake_probability = round(random.uniform(0.08, 0.94), 4)
+    is_fake = fake_probability >= 0.5
+    dist_score = round(random.uniform(2.4, 5.8) if is_fake else random.uniform(0.6, 1.8), 2)
+    landmark_valid = not is_fake or random.random() > 0.4
+    rppg_valid = not is_fake or random.random() > 0.6
+
+    reasons = [
+        f"[DEMO] Simulated distribution-matching distance: {dist_score:.2f}.",
+        f"[DEMO] Facial landmark motion signal: {'Tracked successfully with stable velocity.' if landmark_valid else 'Significant inter-frame trajectory jitter detected.'}",
+        f"[DEMO] Pulse (rPPG) biological signal: {'Plausible blood volume pulse rhythm.' if rppg_valid else 'Irregular/absent pulse rhythm in facial region.'}",
+    ]
+
+    return JSONResponse({
+        "prediction": "fake" if is_fake else "real",
+        "verdict": "Manipulated / Deepfake" if is_fake else "Authentic / Real",
+        "confidence": round(max(fake_probability, 1 - fake_probability) * 100, 2),
+        "fake_probability": fake_probability,
+        "real_probability": round(1 - fake_probability, 4),
+        "signals": {
+            "distribution_score": dist_score,
+            "landmark_motion_valid": landmark_valid,
+            "rppg_valid": rppg_valid,
+        },
+        "branch_scores": {
+            "semantic_spatial": {"score": round(fake_probability * 0.95, 3), "label": "Spatial Artifacts"},
+            "temporal_consistency": {"score": round(fake_probability * 0.91, 3), "label": "Temporal Inconsistency"},
+            "distribution_distance": {"mahalanobis_distance": dist_score, "status": "Evaluated"},
+        },
+        "reasons": reasons,
+        "demo": True,
+        "filename": file.filename,
+    })
 
 
 @app.get("/{full_path:path}")

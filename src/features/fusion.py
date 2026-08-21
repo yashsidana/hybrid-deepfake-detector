@@ -58,7 +58,7 @@ class DistributionMatcher:
         self.inv_cov_ = None
 
     def fit(self, real_embeddings):
-        real_embeddings = np.asarray(real_embeddings, dtype=np.float64)
+        real_embeddings = np.nan_to_num(np.asarray(real_embeddings, dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
         if len(real_embeddings) < 2:
             raise ValueError(
                 "DistributionMatcher.fit needs at least 2 real-class "
@@ -82,11 +82,11 @@ class DistributionMatcher:
         if self.mean_ is None:
             raise RuntimeError("DistributionMatcher.fit() must be called before score().")
 
-        embeddings = np.asarray(embeddings, dtype=np.float64)
+        embeddings = np.nan_to_num(np.asarray(embeddings, dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
         diff = embeddings - self.mean_
         left = diff @ self.inv_cov_
         dist_sq = np.einsum("ij,ij->i", left, diff)
-        dist_sq = np.clip(dist_sq, a_min=0, a_max=None)  # guard tiny negative values from float error
+        dist_sq = np.nan_to_num(np.clip(dist_sq, a_min=0, a_max=None), nan=0.0, posinf=0.0, neginf=0.0)
         return np.sqrt(dist_sq)
 
 
@@ -99,19 +99,9 @@ def build_fused_vector(semantic_embeddings, temporal_embeddings,
     each branch scaled by its configured weight before concatenation
     (config.yaml's models.fusion.semantic_weight / temporal_weight /
     forensic_weight).
-
-    Weights may be scalars (global, static weighting — what's used today)
-    or per-sample arrays of shape [N, 1] (adaptive weighting — what the
-    proposal describes: "if compression is detected... the weight of
-    temporal and rPPG features is higher"). Both broadcast correctly
-    against [N, D] embeddings, so train_fusion.py won't need to change
-    when forensic_extractor.py's compression detector starts producing
-    per-sample weights.
-
-    distribution_scores, if given, is appended as one extra scalar column.
     """
-    semantic_embeddings = np.asarray(semantic_embeddings, dtype=np.float32)
-    temporal_embeddings = np.asarray(temporal_embeddings, dtype=np.float32)
+    semantic_embeddings = np.nan_to_num(np.asarray(semantic_embeddings, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+    temporal_embeddings = np.nan_to_num(np.asarray(temporal_embeddings, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
 
     parts = [
         semantic_embeddings * semantic_weight,
@@ -119,13 +109,13 @@ def build_fused_vector(semantic_embeddings, temporal_embeddings,
     ]
 
     if forensic_embeddings is not None:
-        forensic_embeddings = np.asarray(forensic_embeddings, dtype=np.float32)
+        forensic_embeddings = np.nan_to_num(np.asarray(forensic_embeddings, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
         parts.append(forensic_embeddings * forensic_weight)
 
     fused = np.concatenate(parts, axis=1)
 
     if distribution_scores is not None:
-        distribution_scores = np.asarray(distribution_scores, dtype=np.float32).reshape(-1, 1)
+        distribution_scores = np.nan_to_num(np.asarray(distribution_scores, dtype=np.float32).reshape(-1, 1), nan=0.0, posinf=0.0, neginf=0.0)
         fused = np.concatenate([fused, distribution_scores], axis=1)
 
-    return fused
+    return np.nan_to_num(fused, nan=0.0, posinf=0.0, neginf=0.0)

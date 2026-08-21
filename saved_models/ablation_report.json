@@ -1,0 +1,32 @@
+[
+  {
+    "model": "A: Semantic only",
+    "fused_dim": 257,
+    "best_C": 1,
+    "val_macro_f1": 0.3822067730805375,
+    "test_accuracy": 0.8838709677419355,
+    "test_macro_f1": 0.6892365193500081,
+    "test_balanced_accuracy": 0.8808867474345016,
+    "test_roc_auc": 0.9535314693414255
+  },
+  {
+    "model": "B: Semantic + Temporal",
+    "fused_dim": 513,
+    "best_C": 10,
+    "val_macro_f1": 0.33733066668774686,
+    "test_accuracy": 0.9139784946236559,
+    "test_macro_f1": 0.7489743036061325,
+    "test_balanced_accuracy": 0.9449605040654173,
+    "test_roc_auc": 0.9863327851004193
+  },
+  {
+    "model": "C: Semantic + Temporal + Forensic (full hybrid)",
+    "fused_dim": 576,
+    "best_C": 1,
+    "val_macro_f1": 0.3483219417811721,
+    "test_accuracy": 0.896774193548387,
+    "test_macro_f1": 0.715972717092538,
+    "test_balanced_accuracy": 0.9166068243415414,
+    "test_roc_auc": 0.9838078250596493
+  }
+]

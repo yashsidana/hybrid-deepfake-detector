@@ -9,12 +9,17 @@ from facenet_pytorch import MTCNN
 #
 # select_largest=True + keep_all=False: mirrors the old behavior of
 # "take the first/most prominent detected face" with a single return value.
+import torch
+
+_device = "cuda" if torch.cuda.is_available() else "cpu"
+
 _mtcnn = MTCNN(
     image_size=224,
     margin=20,
     post_process=False,
     select_largest=True,
     keep_all=False,
+    device=_device,
 )
 
 
@@ -46,10 +51,52 @@ def detect_face(frame):
         return cv2.resize(img, (224, 224))
 
     # face_tensor: [3, 224, 224], float, range ~[0, 255] since post_process=False
-    face_rgb = face_tensor.permute(1, 2, 0).numpy().astype(np.uint8)
+    face_rgb = face_tensor.permute(1, 2, 0).cpu().numpy().astype(np.uint8)
     face_bgr = cv2.cvtColor(face_rgb, cv2.COLOR_RGB2BGR)
 
     return face_bgr
+
+
+def detect_faces_batch(frames):
+    """
+    Fast and temporally coherent face sequence tracking on GPU.
+    Detects face box on frame 0 and applies smooth crop across the sequence.
+    Input:
+        frames -> tensor [N, 3, 224, 224], BGR, values in [0, 1]
+    Output:
+        face_crops -> numpy array [N, 224, 224, 3], BGR, uint8
+    """
+    n = frames.shape[0]
+    face_crops = np.zeros((n, 224, 224, 3), dtype=np.uint8)
+
+    # Convert frame 0 to raw BGR uint8
+    f0_bgr = (frames[0].permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+    box = detect_face_box(f0_bgr)
+
+    if box is not None:
+        x1, y1, x2, y2 = box
+        # Add slight margin if possible
+        h, w = f0_bgr.shape[:2]
+        pad_x = int((x2 - x1) * 0.1)
+        pad_y = int((y2 - y1) * 0.1)
+        x1 = max(0, x1 - pad_x)
+        y1 = max(0, y1 - pad_y)
+        x2 = min(w, x2 + pad_x)
+        y2 = min(h, y2 + pad_y)
+
+        for i in range(n):
+            img_bgr = (frames[i].permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+            crop = img_bgr[y1:y2, x1:x2]
+            if crop.size > 0:
+                face_crops[i] = cv2.resize(crop, (224, 224))
+            else:
+                face_crops[i] = cv2.resize(img_bgr, (224, 224))
+    else:
+        for i in range(n):
+            img_bgr = (frames[i].permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+            face_crops[i] = cv2.resize(img_bgr, (224, 224))
+
+    return face_crops
 
 
 

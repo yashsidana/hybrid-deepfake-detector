@@ -1,0 +1,10 @@
+{
+  "best_params": {
+    "C": 1,
+    "gamma": "scale",
+    "kernel": "rbf"
+  },
+  "val_macro_f1": 0.3483219417811721,
+  "train_samples": 865,
+  "val_samples": 1095
+}

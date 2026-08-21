@@ -9,9 +9,13 @@ data/processed/
 data/metadata/*.csv
 data/splits/
 data/splits_*
+data/diag.txt
 models/**/*.pkl
 models/**/*.pth
-saved_models/
+saved_models/*.pth
+saved_models/*.pt
+saved_models/*.log
+!saved_models/*.json
 results_bundle.zip
 
 # Python cache & artifacts

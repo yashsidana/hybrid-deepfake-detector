@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from src.preprocessing.face_detection import detect_face
+from src.preprocessing.face_detection import detect_face, detect_faces_batch
 from src.preprocessing.frame_sampler import sample_frames
 
 METADATA_PATH = "data/metadata/metadata.csv"
@@ -51,9 +51,7 @@ def process_all(metadata_path=METADATA_PATH, raw_root=RAW_ROOT, save_root=SAVE_R
 
         try:
             frames = sample_frames(video_abs_path, num_frames=num_frames, size=(224, 224))
-            face_sequence = np.zeros((num_frames, 224, 224, 3), dtype=np.uint8)
-            for i in range(frames.shape[0]):
-                face_sequence[i] = detect_face(frames[i])
+            face_sequence = detect_faces_batch(frames)
             np.save(save_path, face_sequence)
         except Exception as e:
             skipped += 1

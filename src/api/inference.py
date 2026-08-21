@@ -115,48 +115,47 @@ def _prepare_temporal_input(face_sequence_bgr):
     return sequence
 
 
+import time
+
 @torch.no_grad()
 def predict_video(video_path):
     """
-    Runs the full pipeline over `video_path` and returns:
-        {
-            "prediction": "real" | "fake",
-            "fake_probability": float in [0, 1],
-            "real_probability": float in [0, 1],
-        }
-
-    Raises ModelNotReadyError if a required model file is missing.
+    Runs the full pipeline over `video_path` and returns comprehensive
+    multi-modal diagnostics for the web UI and REST API.
     """
+    start_time = time.time()
     _bundle.ensure_loaded()
     device = _bundle.device
 
-    # Semantic input: single representative frame + face crop -- exactly
-    # matching precompute_faces.py's contract.
+    # 1. Semantic input: representative face crop
     single_frame = sample_frames(video_path, num_frames=1)
     face_image = detect_face(single_frame[0])  # [224, 224, 3] uint8 BGR
 
-    # Temporal input: 16-frame face sequence -- exactly matching
-    # precompute_temporal.py's contract.
+    # 2. Temporal input: 16-frame face sequence
     sequence_frames = sample_frames(video_path, num_frames=16, size=(224, 224))
     face_sequence = np.zeros((16, 224, 224, 3), dtype=np.uint8)
     for i in range(sequence_frames.shape[0]):
         face_sequence[i] = detect_face(sequence_frames[i])
 
-    # Forensic vector: SRM + texture (from face_image) + landmark motion
-    # (from face_sequence) + rPPG (reads video_path directly, for its own
-    # denser frame sampling -- see forensic_extractor.py).
+    # 3. Forensic handcrafted features
     forensic_vector = extract_forensic_vector(video_path, face_image, face_sequence)
 
+    # 4. Neural Branch Embeddings
     semantic_tensor = _prepare_semantic_input(face_image).unsqueeze(0).to(device)
     temporal_tensor = _prepare_temporal_input(face_sequence).unsqueeze(0).to(device)
 
-    semantic_embedding, _ = _bundle.semantic_model(semantic_tensor)
-    temporal_embedding, _ = _bundle.temporal_model(temporal_tensor)
+    semantic_embedding, semantic_logits = _bundle.semantic_model(semantic_tensor)
+    temporal_embedding, temporal_logits = _bundle.temporal_model(temporal_tensor)
 
     semantic_embedding = semantic_embedding.cpu().numpy()
     temporal_embedding = temporal_embedding.cpu().numpy()
     forensic_embedding = forensic_vector[np.newaxis, :]
 
+    # Branch-specific probabilities from neural heads
+    sem_prob_fake = float(torch.softmax(semantic_logits, dim=1)[0, 1].item())
+    temp_prob_fake = float(torch.softmax(temporal_logits, dim=1)[0, 1].item())
+
+    # 5. Hybrid Feature Fusion & Distribution Matching
     bundle = _bundle.fusion_bundle
     matcher = bundle["distribution_matcher"]
     semantic_weight = bundle["semantic_weight"]
@@ -171,12 +170,12 @@ def predict_video(video_path):
         semantic_weight=semantic_weight, temporal_weight=temporal_weight,
         forensic_embeddings=forensic_arg, forensic_weight=forensic_weight,
     )
-    distribution_score = matcher.score(base_fused)
+    distribution_score = float(matcher.score(base_fused)[0])
     fused = build_fused_vector(
         semantic_embedding, temporal_embedding,
         semantic_weight=semantic_weight, temporal_weight=temporal_weight,
         forensic_embeddings=forensic_arg, forensic_weight=forensic_weight,
-        distribution_scores=distribution_score,
+        distribution_scores=np.array([distribution_score]),
     )
 
     fused_scaled = bundle["scaler"].transform(fused)
@@ -184,9 +183,46 @@ def predict_video(video_path):
 
     fake_probability = float(probs[1])
     real_probability = float(probs[0])
+    prediction = "fake" if fake_probability >= 0.5 else "real"
+    confidence = float(max(fake_probability, real_probability) * 100.0)
+    elapsed_ms = round((time.time() - start_time) * 1000, 1)
+
+    # Handcrafted feature telemetry
+    # SRM energy (first 24 dims mean), texture variance, landmark jitter, rPPG variance
+    srm_energy = float(np.mean(np.abs(forensic_vector[:24])))
+    texture_score = float(np.mean(forensic_vector[24:47]))
+    landmark_stability = float(np.mean(forensic_vector[47:59]))
+    rppg_pulse_var = float(forensic_vector[59] if len(forensic_vector) > 59 else 0.0)
 
     return {
-        "prediction": "fake" if fake_probability >= 0.5 else "real",
-        "fake_probability": fake_probability,
-        "real_probability": real_probability,
+        "prediction": prediction,
+        "verdict": "Manipulated / Deepfake" if prediction == "fake" else "Authentic / Real",
+        "confidence": round(confidence, 2),
+        "fake_probability": round(fake_probability, 4),
+        "real_probability": round(real_probability, 4),
+        "branch_scores": {
+            "semantic_spatial": {
+                "score": round(sem_prob_fake, 4),
+                "label": "Suspicious Spatial Artifacts" if sem_prob_fake >= 0.5 else "Normal Face Geometry",
+            },
+            "temporal_consistency": {
+                "score": round(temp_prob_fake, 4),
+                "label": "Inter-frame Inconsistency" if temp_prob_fake >= 0.5 else "Natural Temporal Flow",
+            },
+            "distribution_distance": {
+                "mahalanobis_distance": round(distribution_score, 4),
+                "status": "Divergent from genuine distribution" if distribution_score > 35 else "Conforms to authentic baseline",
+            },
+        },
+        "forensic_signals": {
+            "srm_residual_noise": round(srm_energy, 4),
+            "texture_anomaly": round(texture_score, 4),
+            "facial_landmark_jitter": round(landmark_stability, 4),
+            "rppg_biological_pulse": round(rppg_pulse_var, 4),
+        },
+        "metadata": {
+            "device": str(device).upper(),
+            "frames_sampled": 16,
+            "inference_time_ms": elapsed_ms,
+        }
     }

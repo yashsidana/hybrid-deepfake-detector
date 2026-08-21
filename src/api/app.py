@@ -22,13 +22,14 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.api.inference import (
-    EVAL_REPORT_PATH,
     FUSION_MODEL_PATH,
     SEMANTIC_CHECKPOINT,
     TEMPORAL_CHECKPOINT,
     ModelNotReadyError,
     predict_video,
 )
+
+EVAL_REPORT_PATH = "saved_models/test_fusion_evaluation_report.json"
 
 ALLOWED_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv"}
 # 200MB: generous for a short clip (the pipeline only ever looks at ~16
